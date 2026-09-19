@@ -13265,10 +13265,10 @@ index f13c6fd90..34bc3ceff 100644
  
  static uint32_t CPUReadMemory(const void *src)
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..0d1d61bbe 100644
+index e6f4aaf6a..a5295fe15 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -87,8 +87,118 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
+@@ -87,8 +87,152 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
  static void DrawTouchControls(void);
  #endif
  
@@ -13305,6 +13305,8 @@ index e6f4aaf6a..0d1d61bbe 100644
 +#endif
 +
 +int main(int argc, char **argv); // for the offsets printed below
++
++static const struct sigaction *FindOldHandler(int sig);
 +
 +static void CrashHandler(int sig, siginfo_t *info, void *ucontext)
 +{
@@ -13359,23 +13361,55 @@ index e6f4aaf6a..0d1d61bbe 100644
 +    SDL_Log("CRASH\n%s", msg);
 +    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "pokeemerald crashed", msg, NULL);
 +
-+    // Restore the default action and re-raise, so the process still dies with
-+    // the right status instead of looping inside the handler.
++    // Chain to whatever was installed before us rather than just dying. This
++    // matters on Android: the runtime installs its own SIGSEGV handler and uses
++    // faults internally (implicit null checks, stack guards), so swallowing
++    // them would break the app rather than merely report on it.
++    {
++        const struct sigaction *old = FindOldHandler(sig);
++
++        if (old != NULL && (old->sa_flags & SA_SIGINFO) && old->sa_sigaction != NULL)
++        {
++            old->sa_sigaction(sig, info, ucontext);
++            return;
++        }
++        if (old != NULL && old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN)
++        {
++            old->sa_handler(sig);
++            return;
++        }
++    }
++
++    // Nothing to chain to: restore the default action and re-raise, so the
++    // process still dies with the right status instead of looping here.
 +    signal(sig, SIG_DFL);
 +    raise(sig);
++}
++
++static const int sCrashSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE };
++static struct sigaction sOldHandlers[4];
++
++static const struct sigaction *FindOldHandler(int sig)
++{
++    size_t i;
++
++    for (i = 0; i < sizeof(sCrashSignals) / sizeof(sCrashSignals[0]); i++)
++        if (sCrashSignals[i] == sig)
++            return &sOldHandlers[i];
++    return NULL;
 +}
 +
 +static void InstallCrashHandler(void)
 +{
 +    struct sigaction sa;
++    size_t i;
 +
 +    SDL_memset(&sa, 0, sizeof(sa));
 +    sa.sa_sigaction = CrashHandler;
 +    sa.sa_flags = SA_SIGINFO;
-+    sigaction(SIGSEGV, &sa, NULL);
-+    sigaction(SIGBUS, &sa, NULL);
-+    sigaction(SIGILL, &sa, NULL);
-+    sigaction(SIGFPE, &sa, NULL);
++
++    for (i = 0; i < sizeof(sCrashSignals) / sizeof(sCrashSignals[0]); i++)
++        sigaction(sCrashSignals[i], &sa, &sOldHandlers[i]);
 +}
 +#else
 +static void InstallCrashHandler(void) {}
@@ -13916,10 +13950,41 @@ index 3136340d7..c57703341 100644
  {
      u32 value0 = *(ctx->scriptPtr++);
 diff --git a/src/task.c b/src/task.c
-index b188cbbcb..e81cab9dd 100644
+index b188cbbcb..6ed6a308d 100644
 --- a/src/task.c
 +++ b/src/task.c
-@@ -136,6 +136,24 @@ void TaskDummy(u8 taskId)
+@@ -6,6 +6,14 @@ COMMON_DATA struct Task gTasks[NUM_TASKS] = {0};
+ static void InsertTask(u8 newTaskId);
+ static u8 FindFirstActiveTask(void);
+ 
++#if __SIZEOF_POINTER__ > 4
++// Forward declaration: the side tables are defined further down, but they have
++// to be cleared from CreateTask/ResetTasks above them.
++static void ClearTaskSidecars(u8 taskId);
++#else
++#define ClearTaskSidecars(taskId) ((void)0)
++#endif
++
+ void ResetTasks(void)
+ {
+     u8 i;
+@@ -18,6 +26,7 @@ void ResetTasks(void)
+         gTasks[i].next = i + 1;
+         gTasks[i].priority = -1;
+         memset(gTasks[i].data, 0, sizeof(gTasks[i].data));
++        ClearTaskSidecars(i);
+     }
+ 
+     gTasks[0].prev = HEAD_SENTINEL;
+@@ -36,6 +45,7 @@ u8 CreateTask(TaskFunc func, u8 priority)
+             gTasks[i].priority = priority;
+             InsertTask(i);
+             memset(gTasks[i].data, 0, sizeof(gTasks[i].data));
++            ClearTaskSidecars(i);
+             gTasks[i].isActive = TRUE;
+             return i;
+         }
+@@ -136,6 +146,26 @@ void TaskDummy(u8 taskId)
  {
  }
  
@@ -13932,19 +13997,21 @@ index b188cbbcb..e81cab9dd 100644
 +
 +void SetTaskFuncWithFollowupFunc(u8 taskId, TaskFunc func, TaskFunc followupFunc)
 +{
-+    sFollowupFuncs[taskId] = followupFunc;
++    if (taskId < NUM_TASKS)
++        sFollowupFuncs[taskId] = followupFunc;
 +    gTasks[taskId].func = func;
 +}
 +
 +void SwitchTaskToFollowupFunc(u8 taskId)
 +{
-+    gTasks[taskId].func = sFollowupFuncs[taskId];
++    if (taskId < NUM_TASKS)
++        gTasks[taskId].func = sFollowupFuncs[taskId];
 +}
 +#else
  void SetTaskFuncWithFollowupFunc(u8 taskId, TaskFunc func, TaskFunc followupFunc)
  {
      u8 followupFuncIndex = NUM_TASK_DATA - 2; // Should be const.
-@@ -151,6 +169,7 @@ void SwitchTaskToFollowupFunc(u8 taskId)
+@@ -151,6 +181,7 @@ void SwitchTaskToFollowupFunc(u8 taskId)
  
      gTasks[taskId].func = (TaskFunc)((u16)(gTasks[taskId].data[followupFuncIndex]) | (gTasks[taskId].data[followupFuncIndex + 1] << 16));
  }
@@ -13952,7 +14019,7 @@ index b188cbbcb..e81cab9dd 100644
  
  bool8 FuncIsActiveTask(TaskFunc func)
  {
-@@ -202,3 +221,35 @@ u32 GetWordTaskArg(u8 taskId, u8 dataElem)
+@@ -202,3 +233,51 @@ u32 GetWordTaskArg(u8 taskId, u8 dataElem)
      else
          return 0;
  }
@@ -13961,6 +14028,22 @@ index b188cbbcb..e81cab9dd 100644
 +// A pointer does not fit in two s16 slots, so it is kept here instead, keyed
 +// by task and slot. data[] keeps whatever the caller put there.
 +static const void *sPtrTaskArgs[NUM_TASKS][NUM_TASK_DATA];
++
++// CreateTask and ResetTasks memset data[] to zero, so in the original code a
++// task always began with its stored pointer cleared. These tables live outside
++// data[], so without this a new task inherits whatever the previous occupant of
++// that id left behind -- a stale pointer that menu.c would hand to Free().
++static void ClearTaskSidecars(u8 taskId)
++{
++    u32 i;
++
++    if (taskId >= NUM_TASKS)
++        return;
++
++    sFollowupFuncs[taskId] = NULL;
++    for (i = 0; i < NUM_TASK_DATA; i++)
++        sPtrTaskArgs[taskId][i] = NULL;
++}
 +
 +void SetPtrTaskArg(u8 taskId, u8 dataElem, const void *value)
 +{
