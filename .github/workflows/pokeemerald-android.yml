@@ -114,6 +114,7 @@ jobs:
           import sys, re
           syms = []
           main = None
+          mainname = None
           for line in open('/tmp/syms.txt'):
               parts = line.split()
               if len(parts) != 3:
@@ -123,10 +124,19 @@ jobs:
                   continue
               a = int(addr, 16)
               syms.append((a, name))
-              if name == 'main':
-                  main = a
+              # SDL's headers #define main SDL_main, so that is the symbol the
+              # library actually carries -- and what the crash reporter's &main
+              # resolves to.
+              if name in ('SDL_main', 'main'):
+                  if main is None or name == 'SDL_main':
+                      main = a
+                      mainname = name
           if main is None:
-              print('main not found'); sys.exit(0)
+              print('neither SDL_main nor main found; nearest text symbols:')
+              for a, n in sorted(syms)[:20]:
+                  print('  0x%x %s' % (a, n))
+              sys.exit(0)
+          print('anchor symbol: %s' % mainname)
           syms.sort()
           print('main = 0x%x' % main)
           print('--- functions within 30KB before main ---')
