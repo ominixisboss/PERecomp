@@ -471,3 +471,43 @@ One trap worth recording: a `//` comment in `asm/macros/map.inc` silently
 stopped the macro below it from being defined, with no error on the comment
 line itself -- the failure showed up much later as "no such instruction:
 map_script". These files take one-line `/* */` comments only.
+
+## Diagnosing crashes on the device
+
+The title-screen crash reported after the truncation work could not be
+reproduced in the desktop 64-bit build, which runs indefinitely. The reason is
+an address-layout difference: Android is always PIE and loads at a high
+address, while the desktop build is `-no-pie` and loads low, so a pointer that
+is *still* being truncated somewhere works locally and only fails on the phone.
+
+Two attempts to reproduce that locally both hit toolchain walls, and are
+recorded here so they are not tried again blind:
+
+- `PIE=1` fails to link: `data/mystery_gift.s` contains a pre-existing
+  `R_X86_64_16` relocation against a symbol, which cannot appear in a PIE.
+- `HIGHADDR=1` (non-PIE, `-Ttext-segment` above 4 GB, `-mcmodel=large`) fails
+  too, because the toolchain's own `crtstuff.o` is built small-model and its
+  relocations truncate.
+
+`Makefile_pc` keeps the `HIGHADDR` knob since it documents the intent, but it
+does not currently link.
+
+So the crash reports itself instead. `src/platform/sdl2.c` installs a handler
+for SIGSEGV/SIGBUS/SIGILL/SIGFPE that shows a dialog on the phone with:
+
+- which signal, and the faulting address (`si_addr`)
+- the **faulting PC**, taken from `ucontext` (`uc_mcontext.pc` on aarch64) --
+  this is the number that locates the bug; `si_addr` only says what was touched
+- the top backtrace frames, each as an offset from `main()`
+
+Offsets from `main()` are used rather than `dladdr`, which would need
+`_GNU_SOURCE` before the first libc header -- something this file cannot
+arrange. CI keeps the unstripped `libmain.so` as an artifact, so:
+
+    aarch64-linux-gnu-addr2line -f -C -e libmain.so <main_file_offset + delta>
+
+turns a number read off the screen into a source line. Find `main`'s own file
+offset with `nm libmain.so | grep ' main$'`.
+
+Verified locally that the handler fires and reports the right fault address,
+and that installing it does not disturb a normal run.
