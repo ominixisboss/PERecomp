@@ -97,6 +97,45 @@ jobs:
       # The on-screen crash reporter prints addresses as an offset from main().
       # Keeping the unstripped library makes those resolvable with addr2line,
       # which is the whole point of printing them.
+      # The on-screen crash reporter prints the faulting PC as an offset from
+      # main(). The unstripped library is kept as an artifact, but artifact
+      # storage is not reachable from every environment, so print the symbols
+      # around main straight into the job log -- that is enough to turn
+      # "main-7180" into a function name without downloading anything.
+      - name: Symbol window around main (for reading crash reports)
+        if: success() && matrix.abi == 'arm64-v8a'
+        run: |
+          SO=$(find .pokeemerald-multiplatform/android/app/build/intermediates/cxx \
+                 -name libmain.so | head -1)
+          NM="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          echo "library: $SO"
+          "$NM" --defined-only "$SO" > /tmp/syms.txt
+          python3 - "$SO" <<'EOF'
+          import sys, re
+          syms = []
+          main = None
+          for line in open('/tmp/syms.txt'):
+              parts = line.split()
+              if len(parts) != 3:
+                  continue
+              addr, kind, name = parts
+              if kind not in 'tT':
+                  continue
+              a = int(addr, 16)
+              syms.append((a, name))
+              if name == 'main':
+                  main = a
+          if main is None:
+              print('main not found'); sys.exit(0)
+          syms.sort()
+          print('main = 0x%x' % main)
+          print('--- functions within 30KB before main ---')
+          for a, n in syms:
+              d = a - main
+              if -30000 <= d <= 2000:
+                  print('main%+d\t0x%x\t%s' % (d, a, n))
+          EOF
+
       - name: Upload unstripped library for symbolizing
         if: success()
         uses: actions/upload-artifact@v4
