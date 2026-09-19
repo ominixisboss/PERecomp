@@ -13265,10 +13265,10 @@ index f13c6fd90..34bc3ceff 100644
  
  static uint32_t CPUReadMemory(const void *src)
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..7048c9bc4 100644
+index e6f4aaf6a..0d1d61bbe 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -87,8 +87,111 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
+@@ -87,8 +87,118 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
  static void DrawTouchControls(void);
  #endif
  
@@ -13283,14 +13283,21 @@ index e6f4aaf6a..7048c9bc4 100644
 +// CI keeps as an artifact. (dladdr would be tidier but needs _GNU_SOURCE
 +// before the first libc header, which this file cannot arrange.)
 +#include <signal.h>
-+#if defined(__ANDROID__) || defined(NATIVE_LINUX)
++// __linux__ rather than NATIVE_LINUX: the Makefile only defines the latter in
++// CPPFLAGS, for the preproc pass, not in the CFLAGS that reach the compiler --
++// so keying on it silently compiled this whole handler out of the desktop
++// build. __linux__ is predefined by the compiler, and Android defines it too.
++#if defined(__linux__)
 +#include <ucontext.h>
 +
-+// backtrace()/<execinfo.h> are a glibc thing. Android's bionic only grew them
-+// in API 33, so this must not be assumed present -- the NDK build fails
-+// outright without the guard. The signal, the fault address and the PC are
-+// what actually locate the bug; the frame list is a bonus where available.
-+#if defined(__has_include)
++// backtrace() is a glibc thing. Checking for <execinfo.h> is NOT enough: the
++// NDK ships the header, so __has_include succeeds, and the build then fails at
++// link time with "undefined symbol: backtrace" because bionic does not export
++// it at this API level. So exclude Android outright.
++//
++// No loss: the signal, the fault address and the PC from ucontext are what
++// actually locate the bug. The frame list is a convenience on desktop.
++#if !defined(__ANDROID__) && defined(__has_include)
 +#if __has_include(<execinfo.h>)
 +#include <execinfo.h>
 +#define HAVE_BACKTRACE 1
