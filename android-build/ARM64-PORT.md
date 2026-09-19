@@ -532,18 +532,48 @@ That is 169 files, and the truncation count is back to 136 as expected.
 `android-build/truncation-baseline.txt`: it may fall, and lowering the file is
 part of landing a piece, but it may never rise.
 
-The batch will go back in as separate, individually testable commits, in
-rough order of how likely each is to be the culprit if a crash reappears:
+The batch goes back in as separate, individually testable commits. The exact
+file split, so this is reproducible rather than approximate:
 
-1. the `fldeff_*` / `braille_puzzles` field-move callbacks (a uniform group)
-2. `battle_factory_screen.c` (29 sites, entirely self-contained)
-3. the `StorePointerInVars` / `StoreWordInTwoHalfwords` helper pairs
-4. `shop.c`, `field_door.c`, `pokeball.c`, `pokemon_animation.c`,
-   `apprentice.c`, `record_mixing.c`, `list_menu.c`, `pokemon.c`
-5. the odd ones out: `m4a.c`, `pokedex.c`, `menu.c`, `battle_controllers.c`
-6. the map script table strides, which change data layout and so carry the
-   most risk
+**Piece 1 -- field-move callbacks** (plus the handle infrastructure they need):
+`src/pointer_handle.c`, the `PackPtr`/`UnpackPtr` declarations in
+`include/global.h`, `src/braille_puzzles.c`, `src/fldeff_cut.c`,
+`src/fldeff_dig.c`, `src/fldeff_misc.c`, `src/fldeff_rocksmash.c`,
+`src/fldeff_strength.c`, `src/fldeff_sweetscent.c`, `src/fldeff_teleport.c`.
+One uniform idiom, one reader, easy to reason about.
 
-Piece 6 is deliberately last: it is the only one that alters emitted data
-rather than C code, and its stride assumptions were verified against real
-aarch64 output but never against a running device.
+**Piece 2 -- battle factory**: `src/battle_factory_screen.c` alone. 29 sites,
+entirely self-contained, and on a screen that is easy to avoid while testing.
+
+**Piece 3 -- the shared helper pairs**: `src/battle_anim_mons.c` (which owns
+`StorePointerInVars`), `include/util.h`, `src/battle_anim_effects_1.c`,
+`src/battle_anim_fight.c`, `src/event_object_movement.c`, `src/field_effect.c`,
+`src/slot_machine.c`, `src/trainer_see.c`. Note the last two of these store
+*integers* through the pointer helper and had to move to the raw-word helper.
+
+**Piece 4 -- assorted per-file**: `src/shop.c`, `src/field_door.c`,
+`src/pokeball.c`, `src/pokemon_animation.c`, `src/apprentice.c`,
+`src/record_mixing.c`, `src/list_menu.c`, `src/pokemon.c`.
+
+**Piece 5 -- the odd ones out**: `src/m4a.c`, `src/pokedex.c`, `src/menu.c`,
+`src/battle_controllers.c`, `src/battle_controller_player.c`,
+`src/pokemon_icon.c`, `src/pokemon_storage_system.c`, `src/librfu_rfu.c`,
+`src/dynamic_placeholder_text_util.c`, `src/party_menu.c`,
+`src/platform/bios.c`, `src/agb_flash.c`, `src/battle_script_commands.c`,
+`src/field_control_avatar.c`, `src/mystery_event_script.c`. These are not one
+idiom -- they include the three arithmetic sites that a mechanical pass would
+have broken, so this piece needs the closest reading.
+
+**Piece 6 -- map script tables**: `asm/macros/map.inc`, `src/script.c`, and the
+`T2_READ_PTR` change in `include/global.h`. Last, because it is the only piece
+that alters emitted data rather than C code. Its layout was verified against
+real aarch64 output (entry is a type byte then an unaligned 8-byte pointer,
+stride 9) but never against a running device.
+
+Two traps when landing these from the reference tree:
+
+- `src/platform/sdl2.c` must never be copied across. The reference predates the
+  crash reporter and copying it would silently remove it.
+- `include/global.h` carries two unrelated changes -- the `PackPtr` declaration
+  (piece 1) and the `T2_READ_PTR` widening (piece 6). It has to be split by
+  hunk, not copied whole.
