@@ -592,3 +592,41 @@ the normal startup path where a message box works. It is deleted once shown.
 
 Verified end to end on the desktop build: crash, report written, next launch
 displays it, file removed.
+
+## The crash, found: DMA destination reload
+
+The on-screen crash reporter, a device report and the CI symbol window
+together located this exactly, with no guessing:
+
+    SIGSEGV
+    fault address: 0x9c4218bc
+    PC: main-7180
+
+`0x789c4218bc` is a real address in that process, and `0x9c4218bc` is its low
+32 bits -- so a pointer had been truncated. The symbol window placed the PC
+between `RunDMAs` (main-7352) and `DmaSet` (main-6956): 172 bytes into
+`RunDMAs`, in `src/platform/dma.c`.
+
+`DmaSet` keeps the real pointers in `DMAList`, which is correct. It also
+writes them into the emulated `REG_DMAxSAD`/`DAD` registers, which are 32 bits
+wide because that is what they are on the hardware -- so those copies are
+necessarily truncated. That was harmless until `RunDMAs` reloaded from one:
+
+```c
+if (((dma->control) & DMA_DEST_MASK) == DMA_DEST_RELOAD)
+    dma->dst = (void *)(uintptr_t)((&REG_DMA0DAD)[dmaNum * 3]);
+```
+
+On a repeating DMA with `DMA_DEST_RELOAD`, the destination was rebuilt from
+the 32-bit register, so after the first repeat it became a truncated address
+and the next transfer wrote to it. Repeating DMAs drive the scanline and
+screen effects, which is why it fired on a screen transition and not during
+ordinary play.
+
+The fix keeps the destination as originally programmed in the transfer record
+and reloads from that. Equivalent to the hardware, which reloads from a
+register that really does hold the whole address.
+
+This one could never have been found from the compiler warnings: both sides of
+the assignment are correctly typed, and the truncation happens in the emulated
+hardware register in between.
