@@ -13265,10 +13265,18 @@ index f13c6fd90..34bc3ceff 100644
  
  static uint32_t CPUReadMemory(const void *src)
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..4aa61375c 100644
+index e6f4aaf6a..fe1dd5458 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -87,8 +87,152 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
+@@ -57,6 +57,7 @@ struct SiiRtcInfo internalClock;
+ 
+ static FILE *sSaveFile = NULL;
+ static char sSavePath[1024] = "pokeemerald.sav";
++static char sCrashPath[1024] = "pokeemerald-crash.txt";
+ static char sConfigPath[1024] = "pokeemerald.cfg";
+ static u8 sBorderBackground;
+ static bool sHasBorderBackgroundConfig;
+@@ -87,8 +88,194 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
  static void DrawTouchControls(void);
  #endif
  
@@ -13283,6 +13291,8 @@ index e6f4aaf6a..4aa61375c 100644
 +// CI keeps as an artifact. (dladdr would be tidier but needs _GNU_SOURCE
 +// before the first libc header, which this file cannot arrange.)
 +#include <signal.h>
++#include <fcntl.h>
++#include <unistd.h>
 +// __linux__ rather than NATIVE_LINUX: the Makefile only defines the latter in
 +// CPPFLAGS, for the preproc pass, not in the CFLAGS that reach the compiler --
 +// so keying on it silently compiled this whole handler out of the desktop
@@ -13359,6 +13369,24 @@ index e6f4aaf6a..4aa61375c 100644
 +#endif
 +
 +    SDL_Log("CRASH\n%s", msg);
++
++    // Write it out before attempting any UI. SDL_ShowSimpleMessageBox has to
++    // hop to the UI thread through JNI on Android, which from a crashing
++    // thread will often fail silently -- that is exactly what "no dialog, the
++    // app just closes" looks like. open/write are usable here; the report is
++    // shown on the next launch instead, from a healthy thread.
++    {
++        int fd = open(sCrashPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
++
++        if (fd >= 0)
++        {
++            ssize_t unused = write(fd, msg, len);
++
++            (void)unused;
++            close(fd);
++        }
++    }
++
 +    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "pokeemerald crashed", msg, NULL);
 +
 +    // Chain to whatever was installed before us rather than just dying. This
@@ -13415,13 +13443,50 @@ index e6f4aaf6a..4aa61375c 100644
 +static void InstallCrashHandler(void) {}
 +#endif
 +
++// Shows the report left by a previous crash, from the normal startup path
++// where the UI thread is healthy, then removes it so it is only shown once.
++static void ReportPreviousCrash(void)
++{
++    char buf[2048];
++    int fd = open(sCrashPath, O_RDONLY);
++    ssize_t n;
++
++    if (fd < 0)
++        return;
++    n = read(fd, buf, sizeof(buf) - 1);
++    close(fd);
++    if (n > 0)
++    {
++        buf[n] = '\0';
++        SDL_Log("previous crash:\n%s", buf);
++        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
++                                 "pokeemerald crashed last time", buf, NULL);
++    }
++    remove(sCrashPath);
++}
++
  int main(int argc, char **argv)
  {
 +    InstallCrashHandler();
      // Open an output console on Windows
  #ifdef _WIN32
      AllocConsole() ;
-@@ -1057,16 +1201,75 @@ u16 GetXInputKeys()
+@@ -125,9 +312,14 @@ int main(int argc, char **argv)
+     {
+         SDL_snprintf(sSavePath, sizeof(sSavePath), "%spokeemerald.sav", prefPath);
+         SDL_snprintf(sConfigPath, sizeof(sConfigPath), "%spokeemerald.cfg", prefPath);
++        SDL_snprintf(sCrashPath, sizeof(sCrashPath), "%spokeemerald-crash.txt", prefPath);
+         SDL_free(prefPath);
+     }
+ #endif
++    // Before anything else: if the last run left a crash report, show it now,
++    // from a healthy thread where a message box actually works.
++    ReportPreviousCrash();
++
+     ReadSaveFile(sSavePath);
+     ReadConfigFile();
+ 
+@@ -1057,16 +1249,75 @@ u16 GetXInputKeys()
  }
  #endif // _WIN32
  

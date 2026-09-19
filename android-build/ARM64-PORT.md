@@ -577,3 +577,18 @@ Two traps when landing these from the reference tree:
 - `include/global.h` carries two unrelated changes -- the `PackPtr` declaration
   (piece 1) and the `T2_READ_PTR` widening (piece 6). It has to be split by
   hunk, not copied whole.
+
+### "No dialog, the app just closes" is not evidence of no crash
+
+The first crash reporter showed its report with `SDL_ShowSimpleMessageBox`.
+On Android that has to reach the UI thread through JNI, which from a thread
+that is already crashing will usually fail silently -- so the handler can fire,
+correctly, and the user still sees nothing but the app disappearing. Absence of
+the dialog says nothing about whether a signal was raised.
+
+The report is therefore written to a file first, with `open`/`write` (usable
+from a handler), next to the save file, and shown on the **next** launch from
+the normal startup path where a message box works. It is deleted once shown.
+
+Verified end to end on the desktop build: crash, report written, next launch
+displays it, file removed.
