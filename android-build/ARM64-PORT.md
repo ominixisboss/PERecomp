@@ -511,3 +511,39 @@ offset with `nm libmain.so | grep ' main$'`.
 
 Verified locally that the handler fires and reports the right fault address,
 and that installing it does not disturb a normal run.
+
+## Reverted: the truncation batch goes back in pieces
+
+Landing all 136 truncation fixes at once was a mistake. The build that came out
+of it crashed at the *title* screen, earlier than the build before it, and with
+no way to reproduce that locally there was no way to tell which of the 136 did
+it. One large change that cannot be bisected is worse than the bug it fixes.
+
+The patch is therefore back to the state at `0fe5044`:
+
+- everything through the map-group alignment fix, which is the build that
+  reached the overworld and the party menu
+- plus the three fixes on the party-screen path (window tile data, pointer-
+  width task args, the task followup function)
+- plus the on-screen crash reporter, which is diagnostic only
+
+That is 169 files, and the truncation count is back to 136 as expected.
+`build-native64.sh` now treats that number as a **ratchet** read from
+`android-build/truncation-baseline.txt`: it may fall, and lowering the file is
+part of landing a piece, but it may never rise.
+
+The batch will go back in as separate, individually testable commits, in
+rough order of how likely each is to be the culprit if a crash reappears:
+
+1. the `fldeff_*` / `braille_puzzles` field-move callbacks (a uniform group)
+2. `battle_factory_screen.c` (29 sites, entirely self-contained)
+3. the `StorePointerInVars` / `StoreWordInTwoHalfwords` helper pairs
+4. `shop.c`, `field_door.c`, `pokeball.c`, `pokemon_animation.c`,
+   `apprentice.c`, `record_mixing.c`, `list_menu.c`, `pokemon.c`
+5. the odd ones out: `m4a.c`, `pokedex.c`, `menu.c`, `battle_controllers.c`
+6. the map script table strides, which change data layout and so carry the
+   most risk
+
+Piece 6 is deliberately last: it is the only one that alters emitted data
+rather than C code, and its stride assumptions were verified against real
+aarch64 output but never against a running device.
