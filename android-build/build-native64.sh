@@ -74,10 +74,16 @@ file pokeemerald | grep -q 'ELF 64-bit' || { echo "ERROR: not a 64-bit binary" >
 # A pointer-width bug shows up as SIGSEGV/SIGBUS within the first few seconds,
 # during the intro and its music. Surviving the window is the pass condition;
 # `timeout` returning 124 means it was still running when we stopped it.
-log "Running headless for ${RUN_SECONDS}s"
+# Drive it with synthetic input rather than watching it sit on the title
+# screen. Without this every menu and every screen transition is untested, and
+# a crash on "press Start" would not be caught here at all. The frame numbers
+# just spread presses across the intro and the menus that follow.
+AUTOKEYS="${POKE_AUTOKEYS:-300=START 600=START 900=START 1200=A 1500=A 1800=START 2100=A}"
+
+log "Running headless for ${RUN_SECONDS}s (input: $AUTOKEYS)"
 rm -f pokeemerald.sav
 set +e
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy POKE_AUTOKEYS="$AUTOKEYS" \
     timeout "$RUN_SECONDS" ./pokeemerald > run.log 2>&1
 status=$?
 set -e

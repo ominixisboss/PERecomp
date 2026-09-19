@@ -13265,7 +13265,7 @@ index f13c6fd90..34bc3ceff 100644
  
  static uint32_t CPUReadMemory(const void *src)
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..a5295fe15 100644
+index e6f4aaf6a..4aa61375c 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
 @@ -87,8 +87,152 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
@@ -13421,6 +13421,85 @@ index e6f4aaf6a..a5295fe15 100644
      // Open an output console on Windows
  #ifdef _WIN32
      AllocConsole() ;
+@@ -1057,16 +1201,75 @@ u16 GetXInputKeys()
+ }
+ #endif // _WIN32
+ 
++// Synthetic input for headless testing. The CI runtime check has no way to
++// press a button, so the game could only ever be observed sitting on the title
++// screen -- every menu, and every transition between screens, went untested.
++//
++//   POKE_AUTOKEYS="600=START 900=A"
++//
++// presses that button for a few frames at that frame number. With the variable
++// unset nothing changes at all.
++static u16 AutoKeys(void)
++{
++    static const struct { const char *name; u16 bit; } names[] = {
++        { "A", A_BUTTON }, { "B", B_BUTTON }, { "START", START_BUTTON },
++        { "SELECT", SELECT_BUTTON }, { "UP", DPAD_UP }, { "DOWN", DPAD_DOWN },
++        { "LEFT", DPAD_LEFT }, { "RIGHT", DPAD_RIGHT },
++    };
++    static unsigned long frame;
++    static const char *script;
++    static bool checked;
++    const char *p;
++    u16 keys = 0;
++
++    if (!checked)
++    {
++        script = SDL_getenv("POKE_AUTOKEYS");
++        checked = true;
++    }
++    frame++;
++    if (script == NULL)
++        return 0;
++
++    // Held for 8 frames so the game samples it as a fresh press.
++    for (p = script; *p != '\0'; p++)
++    {
++        unsigned long at = SDL_strtoul(p, (char **)&p, 10);
++        size_t i;
++
++        if (*p != '=')
++            break;
++        p++;
++        for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
++        {
++            size_t n = SDL_strlen(names[i].name);
++
++            if (SDL_strncmp(p, names[i].name, n) == 0)
++            {
++                if (frame >= at && frame < at + 8)
++                    keys |= names[i].bit;
++                p += n;
++                break;
++            }
++        }
++        while (*p != '\0' && *p != ' ')
++            p++;
++        if (*p == '\0')
++            break;
++    }
++    return keys;
++}
++
+ u16 Platform_GetKeyInput(void)
+ {
+ #ifdef _WIN32
+     u16 gamepadKeys = GetXInputKeys();
+-    return gamepadKeys | keyboardKeys;
++    return gamepadKeys | keyboardKeys | AutoKeys();
+ #elif defined(__ANDROID__)
+-    return keyboardKeys | controllerKeys | controllerAxisKeys;
++    return keyboardKeys | controllerKeys | controllerAxisKeys | AutoKeys();
+ #endif
+ 
+-    return keyboardKeys;
++    return keyboardKeys | AutoKeys();
+ }
+ 
+ void VDraw(SDL_Texture *texture)
 diff --git a/src/pokemon_jump.c b/src/pokemon_jump.c
 index 326512acf..87c669994 100644
 --- a/src/pokemon_jump.c
