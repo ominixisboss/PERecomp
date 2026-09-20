@@ -11,7 +11,9 @@ set -euo pipefail
 REPO_URL="${REPO_URL:-https://github.com/gradenGnostic/pokeemerald-multiplatform.git}"
 REPO_REF="${REPO_REF:-master}"
 WORK_DIR="${WORK_DIR:-$PWD/.pokeemerald-native64}"
-RUN_SECONDS="${RUN_SECONDS:-30}"
+# 30s only ever reached the title screen. The intro, the main menu and Birch's
+# speech -- where the one crash a user actually hit lived -- need minutes.
+RUN_SECONDS="${RUN_SECONDS:-150}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -46,8 +48,13 @@ log "Generating song assembly from MIDI"
 ls sound/songs/midi/*.mid | sed 's/\.mid$/.s/' > "$WORK_DIR/.songs"
 xargs -a "$WORK_DIR/.songs" make -j"$(nproc)" >/dev/null
 
-log "Building 64-bit native binary"
-make -f Makefile_pc NATIVE_LINUX=1 BITS=64 -j"$(nproc)" 2>&1 | tee build64.log
+# PIE=1 is the point of this job, not a detail. Linked -no-pie the binary
+# loads below 4GB, so a pointer truncated to 32 bits still round-trips and the
+# build happily runs through bugs that kill the APK -- every pointer-width bug
+# so far was found on a phone rather than here. Linked PIE the loader places
+# the image above 4GB, the same as Android, and those bugs fault here instead.
+log "Building 64-bit native binary (PIE, so it loads above 4GB like Android)"
+make -f Makefile_pc NATIVE_LINUX=1 BITS=64 PIE=1 -j"$(nproc)" 2>&1 | tee build64.log
 
 # Every pointer narrowed to 32 bits is a latent crash on a 64-bit target, and
 # the compiler reports each one. These are being fixed in reviewable pieces
@@ -70,6 +77,10 @@ if [ "$COUNT" -lt "$BASELINE" ]; then
     echo "NOTE: count is below the baseline -- lower truncation-baseline.txt to $COUNT"
 fi
 file pokeemerald | grep -q 'ELF 64-bit' || { echo "ERROR: not a 64-bit binary" >&2; exit 1; }
+# A non-PIE binary here would silently turn this whole job back into the weak
+# check it used to be, so fail rather than run something that proves less.
+file pokeemerald | grep -q 'pie executable' \
+    || { echo "ERROR: not linked PIE -- it would load low and hide truncation" >&2; exit 1; }
 
 # A pointer-width bug shows up as SIGSEGV/SIGBUS within the first few seconds,
 # during the intro and its music. Surviving the window is the pass condition;
@@ -78,7 +89,11 @@ file pokeemerald | grep -q 'ELF 64-bit' || { echo "ERROR: not a 64-bit binary" >
 # screen. Without this every menu and every screen transition is untested, and
 # a crash on "press Start" would not be caught here at all. The frame numbers
 # just spread presses across the intro and the menus that follow.
-AUTOKEYS="${POKE_AUTOKEYS:-300=START 600=START 900=START 1200=A 1500=A 1800=START 2100=A}"
+# Past the title screen the intro needs a long run of A presses: through the
+# main menu, Birch's speech, the Lotad that appears during it, and the name
+# entry. The crash that got as far as "This is what we call a POKeMON" was in
+# the mon animation task, which nothing shorter than this ever reached.
+AUTOKEYS="${POKE_AUTOKEYS:-$(printf '600=START 900=A'; for f in $(seq 1000 40 20000); do printf ' %d=A' "$f"; done)}"
 
 log "Running headless for ${RUN_SECONDS}s (input: $AUTOKEYS)"
 rm -f pokeemerald.sav

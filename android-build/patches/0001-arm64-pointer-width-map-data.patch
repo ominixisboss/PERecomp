@@ -1,5 +1,5 @@
 diff --git a/Makefile_pc b/Makefile_pc
-index f961d552e..e2d917874 100644
+index f961d552e..fac5b93e2 100644
 --- a/Makefile_pc
 +++ b/Makefile_pc
 @@ -1,5 +1,25 @@
@@ -28,7 +28,7 @@ index f961d552e..e2d917874 100644
  ifeq ($(NATIVE_LINUX),1)
  PREFIX :=
  SDL_DIR :=
-@@ -63,12 +83,12 @@ DATA_ASM_BUILDDIR = $(OBJ_DIR)/$(DATA_ASM_SUBDIR)
+@@ -63,14 +83,25 @@ DATA_ASM_BUILDDIR = $(OBJ_DIR)/$(DATA_ASM_SUBDIR)
  SONG_BUILDDIR = $(OBJ_DIR)/$(SONG_SUBDIR)
  MID_BUILDDIR = $(OBJ_DIR)/$(MID_SUBDIR)
  
@@ -41,9 +41,22 @@ index f961d552e..e2d917874 100644
 -override CFLAGS += -Wno-trigraphs -Wimplicit -Wparentheses -Wunused -m32 -std=gnu99 -fno-dce -fno-builtin -Wno-unused-function -DPORTABLE -DNONMATCHING -D UBFIX -DMODERN=$(MODERN)
 +override CFLAGS += -Wno-trigraphs -Wimplicit -Wparentheses -Wunused $(CC_BITS) -std=gnu99 -fno-dce -fno-builtin -Wno-unused-function -DPORTABLE -DNONMATCHING -D UBFIX -DMODERN=$(MODERN)
  ifeq ($(NATIVE_LINUX),1)
++# PIE=1 builds position-independent and lets the loader place the image where
++# it likes, which on x86-64 is above 4GB -- the same situation as the Android
++# APK, where every pointer has significant bits above 32. The default -no-pie
++# link loads low, so a pointer truncated to 32 bits still round-trips and the
++# bug only appears on a phone. See android-build/ARM64-PORT.md.
++ifeq ($(PIE),1)
++override CFLAGS += -fPIE
++override LINK_PIE := -pie
++else
  override CFLAGS += -fno-pie
++override LINK_PIE := -no-pie
++endif
  ROM := pokeemerald
-@@ -81,7 +101,7 @@ endif
+ OBJ_DIR := build/linux
+ else
+@@ -81,7 +112,7 @@ endif
  
  CPPFLAGS := -std=gnu99 -iquote include -iquote $(GFLIB_SUBDIR) -Wno-trigraphs -D NONMATCHING -D PORTABLE -D $(TARGET_PLATFORM) -D $(TILE_RENDERER) -D MODERN=$(MODERN) -D UBFIX
  ifeq ($(NATIVE_LINUX),1)
@@ -51,6 +64,15 @@ index f961d552e..e2d917874 100644
 +CPPFLAGS += $(CC_BITS) -D NATIVE_LINUX $(shell pkg-config --cflags sdl2 SDL2_image)
  else
  CPPFLAGS += -I$(SDL_DIR)/include -L$(SDL_DIR)/lib
+ endif
+@@ -365,7 +396,7 @@ $(ELF): $(OBJ_DIR)/ld_script.ld $(OBJS)
+ 
+ $(ROM): $(OBJS) $(WINDOWS_BORDER)
+ ifeq ($(NATIVE_LINUX),1)
+-	$(CC) $(CFLAGS) -no-pie -Wl,--demangle $(OBJS) $(PLATFORM_INCLUDES) -o $@
++	$(CC) $(CFLAGS) $(LINK_PIE) -Wl,--demangle $(OBJS) $(PLATFORM_INCLUDES) -o $@
+ else
+ 	$(CC) $(CFLAGS) -Wl,--demangle $(OBJS) -static-libgcc -L$(SDL_DIR)/lib $(PLATFORM_INCLUDES) -lwinmm -lxinput -o $@
  endif
 diff --git a/android/app/build.gradle b/android/app/build.gradle
 index 146db1978..8f443203c 100644
@@ -4974,6 +4996,19 @@ index 56351c4f1..9999d574d 100644
 +	ptr MEScrCmd_checksum            /* 0x0f*/
 +	ptr MEScrCmd_crc                 /* 0x10*/
  gMysteryEventScriptCmdTableEnd::
+diff --git a/data/mystery_gift.s b/data/mystery_gift.s
+index 86202b95f..e62d64cb7 100644
+--- a/data/mystery_gift.s
++++ b/data/mystery_gift.s
+@@ -8,6 +8,8 @@
+ #include "constants/songs.h"
+ #include "constants/species.h"
+ #include "constants/vars.h"
++
++	.include "data/specials_numbers.inc"
+ #include "constants/wild_encounter.h"
+ 	.include "asm/macros.inc"
+ 	.include "asm/macros/event.inc"
 diff --git a/data/script_cmd_table.inc b/data/script_cmd_table.inc
 index 206f17876..899ec7c90 100644
 --- a/data/script_cmd_table.inc
@@ -5004,11 +5039,12 @@ index 206f17876..899ec7c90 100644
 +	ptr ScrCmd_nop
  	.endif
 diff --git a/data/specials.inc b/data/specials.inc
-index b8e3afd3d..0c7398038 100644
+index b8e3afd3d..f53926773 100644
 --- a/data/specials.inc
 +++ b/data/specials.inc
-@@ -2,7 +2,7 @@
- .global SPECIAL_\ptr
+@@ -1,537 +1,10 @@
+ .macro def_special ptr
+-.global SPECIAL_\ptr
  .set SPECIAL_\ptr, __special__
  .set __special__, __special__ + 1
 -	.int \ptr
@@ -5016,6 +5052,1094 @@ index b8e3afd3d..0c7398038 100644
  	.endm
  
  .set __special__, 0
+ 		.align 2
+ gSpecials::
+-	def_special HealPlayerParty
+-	def_special SetCableClubWarp
+-	def_special DoCableClubWarp
+-	def_special ReturnFromLinkRoom
+-	def_special CleanupLinkRoomState
+-	def_special ExitLinkRoom
+-	def_special SetPlayerSecretBase
+-	def_special CheckPlayerHasSecretBase
+-	def_special EnterSecretBase
+-	def_special ClearAndLeaveSecretBase
+-	def_special MoveOutOfSecretBase
+-	def_special IsCurSecretBaseOwnedByAnotherPlayer
+-	def_special GetCurSecretBaseRegistrationValidity
+-	def_special ToggleCurSecretBaseRegistry
+-	def_special ShowSecretBaseDecorationMenu
+-	def_special ShowSecretBaseRegistryMenu
+-	def_special PrepSecretBaseBattleFlags
+-	def_special GetSecretBaseOwnerAndState
+-	def_special InitSecretBaseDecorationSprites
+-	def_special SetDecoration
+-	def_special GetObjectEventLocalIdByFlag
+-	def_special GetSecretBaseTypeInFrontOfPlayer
+-	def_special SetSecretBaseOwnerGfxId
+-	def_special PutAwayDecorationIteration
+-	def_special EnterNewlyCreatedSecretBase
+-	def_special SetBattledOwnerFromResult
+-	def_special DoSecretBasePCTurnOffEffect
+-	def_special RecordMixingPlayerSpotTriggered
+-	def_special TryBattleLinkup
+-	def_special TryTradeLinkup
+-	def_special TryRecordMixLinkup
+-	def_special ValidateMixingGameLanguage
+-	def_special CloseLink
+-	def_special ColosseumPlayerSpotTriggered
+-	def_special PlayerEnteredTradeSeat
+-	def_special Script_StartWiredTrade
+-	def_special CableClubSaveGame
+-	def_special TryBerryBlenderLinkup
+-	def_special GetLinkPartnerNames
+-	def_special SpawnLinkPartnerObjectEvent
+-	def_special SavePlayerParty
+-	def_special LoadPlayerParty
+-	def_special ChooseHalfPartyForBattle
+-	def_special Script_ShowLinkTrainerCard
+-	def_special ObjectEventInteractionGetBerryTreeData
+-	def_special ObjectEventInteractionGetBerryName
+-	def_special ObjectEventInteractionGetBerryCountString
+-	def_special Bag_ChooseBerry
+-	def_special ObjectEventInteractionPlantBerryTree
+-	def_special ObjectEventInteractionPickBerryTree
+-	def_special ObjectEventInteractionRemoveBerryTree
+-	def_special ObjectEventInteractionWaterBerryTree
+-	def_special PlayerHasBerries
+-	def_special IsEnigmaBerryValid
+-	def_special GetTrainerBattleMode
+-	def_special ShowTrainerIntroSpeech
+-	def_special ShowTrainerCantBattleSpeech
+-	def_special GetTrainerFlag
+-	def_special DoTrainerApproach
+-	def_special PlayTrainerEncounterMusic
+-	def_special ShouldTryRematchBattle
+-	def_special IsTrainerReadyForRematch
+-	def_special BattleSetup_StartRematchBattle
+-	def_special ShowPokemonStorageSystemPC
+-	def_special HasEnoughMonsForDoubleBattle
+-	def_special TurnOffTVScreen
+-	def_special DoTVShow
+-	def_special DoPokeNews
+-	def_special GetRandomActiveShowIdx
+-	def_special GetSelectedTVShow
+-	def_special InterviewBefore
+-	def_special InterviewAfter
+-	def_special IsLeadMonNicknamedOrNotEnglish
+-	def_special SetContestCategoryStringVarForInterview
+-	def_special GetNextActiveShowIfMassOutbreak
+-	def_special IsTVShowAlreadyInQueue
+-	def_special CheckForPlayersHouseNews
+-	def_special GetMomOrDadStringForTVMessage
+-	def_special ResetTVShowState
+-	def_special GetContestWinnerId
+-	def_special GetContestPlayerId
+-	def_special GetNpcContestantLocalId
+-	def_special BufferContestWinnerTrainerName
+-	def_special BufferContestWinnerMonName
+-	def_special BufferContestTrainerAndMonNames
+-	def_special GetContestMonConditionRanking
+-	def_special SetContestTrainerGfxIds
+-	def_special TryEnterContestMon
+-	def_special GetContestantNamesAtRank
+-	def_special SetLinkContestPlayerGfx
+-	def_special GetContestMonCondition
+-	def_special HasMonWonThisContestBefore
+-	def_special GiveMonContestRibbon
+-	def_special IsContestDebugActive
+-	def_special GiveMonArtistRibbon
+-	def_special TryContestGModeLinkup
+-	def_special SaveGame
+-	def_special DoWateringBerryTreeAnim
+-	def_special ShowEasyChatScreen
+-	def_special ShowEasyChatProfile
+-	def_special Script_GetCurrentMauvilleMan
+-	def_special HasBardSongBeenChanged
+-	def_special SaveBardSongLyrics
+-	def_special HasHipsterTaughtWord
+-	def_special SetHipsterTaughtWord
+-	def_special HipsterTryTeachWord
+-	def_special PlayBardSong
+-	def_special SetMauvilleOldManObjEventGfx
+-	def_special GenerateGiddyLine
+-	def_special GiddyShouldTellAnotherTale
+-	def_special StorytellerGetFreeStorySlot
+-	def_special Script_StorytellerDisplayStory
+-	def_special StorytellerStoryListMenu
+-	def_special StorytellerUpdateStat
+-	def_special Script_StorytellerInitializeRandomStat
+-	def_special HasStorytellerAlreadyRecorded
+-	def_special TraderMenuGetDecoration
+-	def_special GetTraderTradedFlag
+-	def_special DoesPlayerHaveNoDecorations
+-	def_special IsDecorationCategoryFull
+-	def_special TraderShowDecorationMenu
+-	def_special TraderDoDecorationTrade
+-	def_special GetSeedotSizeRecordInfo
+-	def_special CompareSeedotSize
+-	def_special GetLotadSizeRecordInfo
+-	def_special CompareLotadSize
+-	def_special TryPutNameRaterShowOnTheAir
+-	def_special BufferMonNickname
+-	def_special IsMonOTIDNotPlayers
+-	def_special BufferTrendyPhraseString
+-	def_special IsTrendyPhraseBoring
+-	def_special BufferDeepLinkPhrase
+-	def_special GetDewfordHallPaintingNameIndex
+-	def_special SwapRegisteredBike
+-	def_special CalculatePlayerPartyCount
+-	def_special CountPartyNonEggMons
+-	def_special CountPartyAliveNonEggMons_IgnoreVar0x8004Slot
+-	def_special ShouldReadyContestArtist
+-	def_special SaveMuseumContestPainting
+-	def_special DoesContestCategoryHaveMuseumPainting
+-	def_special CountPlayerMuseumPaintings
+-	def_special ShowContestPainting  @ Unused, redundant with showcontestpainting command
+-	def_special MauvilleGymSetDefaultBarriers
+-	def_special MauvilleGymPressSwitch
+-	def_special ShowFieldMessageStringVar4
+-	def_special DrawWholeMapView
+-	def_special StorePlayerCoordsInVars
+-	def_special MauvilleGymDeactivatePuzzle
+-	def_special PetalburgGymSlideOpenRoomDoors
+-	def_special PetalburgGymUnlockRoomDoors
+-	def_special GetPlayerTrainerIdOnesDigit
+-	def_special GetPlayerBigGuyGirlString
+-	def_special GetRivalSonDaughterString
+-	def_special SetHiddenItemFlag
+-	def_special CableCarWarp
+-	def_special CableCar
+-	def_special Overworld_PlaySpecialMapMusic
+-	def_special StartWallClock
+-	def_special Special_ViewWallClock
+-	def_special ChooseStarter
+-	def_special StartWallyTutorialBattle
+-	def_special ChangePokemonNickname
+-	def_special ChoosePartyMon
+-	def_special GetFirstFreePokeblockSlot
+-	def_special DoBerryBlending
+-	def_special PlayRoulette
+-	def_special IsFanClubMemberFanOfPlayer
+-	def_special GetNumFansOfPlayerInTrainerFanClub
+-	def_special BufferFanClubTrainerName
+-	def_special TryLoseFansFromPlayTimeAfterLinkBattle
+-	def_special TryLoseFansFromPlayTime
+-	def_special SetPlayerGotFirstFans
+-	def_special UpdateTrainerFanClubGameClear
+-	def_special Script_TryGainNewFanFromCounter
+-	def_special RockSmashWildEncounter
+-	def_special GabbyAndTyGetBattleNum
+-	def_special GabbyAndTyAfterInterview
+-	def_special GabbyAndTyBeforeInterview
+-	def_special DoTVShowInSearchOfTrainers
+-	def_special IsGabbyAndTyShowOnTheAir
+-	def_special GabbyAndTyGetLastQuote
+-	def_special GabbyAndTyGetLastBattleTrivia
+-	def_special GetGabbyAndTyLocalIds
+-	def_special GetBattleOutcome
+-	def_special GetDaycareMonNicknames
+-	def_special GetDaycareState
+-	def_special RejectEggFromDayCare
+-	def_special GiveEggFromDaycare
+-	def_special SetDaycareCompatibilityString
+-	def_special GetSelectedMonNicknameAndSpecies
+-	def_special StoreSelectedPokemonInDaycare
+-	def_special ChooseSendDaycareMon
+-	def_special ShowDaycareLevelMenu
+-	def_special GetNumLevelsGainedFromDaycare
+-	def_special GetDaycareCost
+-	def_special TakePokemonFromDaycare
+-	def_special ScriptHatchMon
+-	def_special EggHatch
+-	def_special CheckDaycareMonReceivedMail
+-	def_special ShowLinkBattleRecords
+-	def_special IsEnoughForCostInVar0x8005
+-	def_special SubtractMoneyFromVar0x8005
+-	def_special TryFieldPoisonWhiteOut
+-	def_special SetCB2WhiteOut
+-	def_special RotatingGate_InitPuzzle
+-	def_special RotatingGate_InitPuzzleAndGraphics
+-	def_special SetSSTidalFlag
+-	def_special ResetSSTidalFlag
+-	def_special EnterSafariMode
+-	def_special ExitSafariMode
+-	def_special GetPokeblockFeederInFront
+-	def_special OpenPokeblockCaseOnFeeder
+-	def_special IsMirageIslandPresent
+-	def_special UpdateShoalTideFlag
+-	def_special InitBirchState
+-	def_special ScriptGetPokedexInfo
+-	def_special ShowPokedexRatingMessage
+-	def_special DoPCTurnOnEffect
+-	def_special DoPCTurnOffEffect
+-	def_special SetDeptStoreFloor
+-	def_special DoLotteryCornerComputerEffect
+-	def_special EndLotteryCornerComputerEffect
+-	def_special ChooseMonForMoveRelearner
+-	def_special MoveDeleterChooseMoveToForget
+-	def_special MoveDeleterForgetMove
+-	def_special BufferMoveDeleterNicknameAndMove
+-	def_special GetNumMovesSelectedMonHas
+-	def_special TeachMoveRelearnerMove
+-	def_special GetRecordedCyclingRoadResults
+-	def_special Special_BeginCyclingRoadChallenge
+-	def_special GetPlayerAvatarBike
+-	def_special FinishCyclingRoadChallenge
+-	def_special UpdateCyclingRoadState
+-	def_special GetLeadMonFriendshipScore
+-	def_special CallFrontierUtilFunc
+-	def_special CallBattleTowerFunc
+-	def_special CallBattleDomeFunction
+-	def_special CallBattlePalaceFunction
+-	def_special CopyEReaderTrainerGreeting
+-	def_special DoSpecialTrainerBattle
+-	def_special CallBattleArenaFunction
+-	def_special CallBattleFactoryFunction
+-	def_special CallBattlePikeFunction
+-	def_special CallBattlePyramidFunction
+-	def_special StopMapMusic
+-	def_special CallVerdanturfTentFunction
+-	def_special CallFallarborTentFunction
+-	def_special CallSlateportTentFunction
+-	def_special ChoosePartyForBattleFrontier
+-	def_special ValidateEReaderTrainer
+-	def_special GetBattleTowerSinglesStreak
+-	def_special ReducePlayerPartyToSelectedMons
+-	def_special BedroomPC
+-	def_special PlayerPC
+-	def_special FieldShowRegionMap
+-	def_special GetInGameTradeSpeciesInfo
+-	def_special CreateInGameTradePokemon
+-	def_special DoInGameTradeScene
+-	def_special GetTradeSpecies
+-	def_special GetWeekCount
+-	def_special RetrieveLotteryNumber
+-	def_special PickLotteryCornerTicket
+-	def_special ShowBerryBlenderRecordWindow
+-	def_special ResetTrickHouseNuggetFlag
+-	def_special SetTrickHouseNuggetFlag
+-	def_special ScriptMenu_CreatePCMultichoice
+-	def_special AccessHallOfFamePC
+-	def_special Special_ShowDiploma
+-	def_special CheckLeadMonCool
+-	def_special CheckLeadMonBeauty
+-	def_special CheckLeadMonCute
+-	def_special CheckLeadMonSmart
+-	def_special CheckLeadMonTough
+-	def_special LookThroughPorthole
+-/*	def_special DoSoftReset*/
+-	def_special GameClear
+-	def_special MoveElevator
+-	def_special ShowGlassWorkshopMenu
+-	def_special SpawnCameraObject
+-	def_special RemoveCameraObject
+-	def_special GetPokeblockNameByMonNature
+-	def_special GetSecretBaseNearbyMapName
+-	def_special CheckRelicanthWailord
+-	def_special ShouldDoBrailleRegirockEffectOld
+-	def_special DoOrbEffect
+-	def_special FadeOutOrbEffect
+-	def_special WaitWeather
+-	def_special BufferEReaderTrainerName
+-	def_special GetSlotMachineId
+-	def_special GetPlayerFacingDirection
+-	def_special FoundAbandonedShipRoom1Key
+-	def_special FoundAbandonedShipRoom2Key
+-	def_special FoundAbandonedShipRoom4Key
+-	def_special FoundAbandonedShipRoom6Key
+-	def_special LeadMonHasEffortRibbon
+-	def_special GiveLeadMonEffortRibbon
+-	def_special Special_AreLeadMonEVsMaxedOut
+-	def_special Script_FacePlayer
+-	def_special Script_ClearHeldMovement
+-	def_special InitRoamer
+-	def_special TryUpdateRusturfTunnelState
+-	def_special IsGrassTypeInParty
+-	def_special DoContestHallWarp
+-	def_special LoadWallyZigzagoon
+-	def_special IsStarterInParty
+-	def_special CopyCurSecretBaseOwnerName_StrVar1
+-	def_special ScriptCheckFreePokemonStorageSpace
+-	def_special DoSealedChamberShakingEffect_Long
+-	def_special ShowDeptStoreElevatorFloorSelect
+-	def_special InteractWithShieldOrTVDecoration
+-	def_special IsPokerusInParty
+-	def_special SetSootopolisGymCrackedIceMetatiles
+-	def_special ShakeCamera
+-	def_special StartGroudonKyogreBattle
+-	def_special BattleSetup_StartLegendaryBattle
+-	def_special StartRegiBattle
+-	def_special SetTrainerFacingDirection
+-	def_special DoSealedChamberShakingEffect_Short
+-	def_special FoundBlackGlasses
+-	def_special StartDroughtWeatherBlend
+-	def_special DoDiveWarp
+-	def_special DoFallWarp
+-	def_special ShowContestEntryMonPic
+-	def_special HideContestEntryMonPic
+-	def_special SetEReaderTrainerGfxId
+-	def_special BattleSetup_StartLatiBattle
+-	def_special SetRoute119Weather
+-	def_special SetRoute123Weather
+-	def_special GetContestMultiplayerId
+-	def_special ScriptGetPartyMonSpecies
+-	def_special IsSelectedMonEgg
+-	def_special TryInitBattleTowerAwardManObjectEvent
+-	def_special MoveOutOfSecretBaseFromOutside
+-	def_special LoadPlayerBag
+-	def_special Script_FadeOutMapMusic
+-	def_special SetPacifidlogTMReceivedDay
+-	def_special GetDaysUntilPacifidlogTMAvailable
+-	def_special HasAllHoennMons
+-	def_special MonOTNameNotPlayer
+-	def_special BufferLottoTicketNumber
+-	def_special TryHideBattleTowerReporter
+-	def_special DoesPartyHaveEnigmaBerry
+-	def_special GenerateContestRand
+-	def_special SetChampionSaveWarp
+-	def_special TryPutTreasureInvestigatorsOnAir
+-	def_special TryPutLotteryWinnerReportOnAir
+-	def_special TryPutTrainerFanClubOnAir
+-	def_special ShouldHideFanClubInterviewer
+-	def_special ShowGlassWorkshopMenu
+-	def_special PutFanClubSpecialOnTheAir
+-	def_special IncrementDailyPlantedBerries
+-	def_special IncrementDailyPickedBerries
+-	def_special InitSecretBaseVars
+-	def_special CheckInteractedWithFriendsSandOrnament
+-	def_special DeclinedSecretBaseBattle
+-	def_special DrewSecretBaseBattle
+-	def_special WonSecretBaseBattle
+-	def_special LostSecretBaseBattle
+-	def_special CheckInteractedWithFriendsDollDecor
+-	def_special CheckInteractedWithFriendsCushionDecor
+-	def_special CheckInteractedWithFriendsFurnitureBottom
+-	def_special CheckInteractedWithFriendsFurnitureMiddle
+-	def_special CheckInteractedWithFriendsFurnitureTop
+-	def_special CheckInteractedWithFriendsPosterDecor
+-	def_special SetLilycoveLadyGfx
+-	def_special Script_GetLilycoveLadyId
+-	def_special GetFavorLadyState
+-	def_special BufferFavorLadyRequest
+-	def_special HasAnotherPlayerGivenFavorLadyItem
+-	def_special BufferFavorLadyItemName
+-	def_special BufferFavorLadyPlayerName
+-	def_special DidFavorLadyLikeItem
+-	def_special Script_FavorLadyOpenBagMenu
+-	def_special Script_DoesFavorLadyLikeItem
+-	def_special IsFavorLadyThresholdMet
+-	def_special FavorLadyGetPrize
+-	def_special SetFavorLadyState_Complete
+-	def_special GetQuizLadyState
+-	def_special GetQuizAuthor
+-	def_special IsQuizLadyWaitingForChallenger
+-	def_special QuizLadyShowQuizQuestion
+-	def_special QuizLadyGetPlayerAnswer
+-	def_special IsQuizAnswerCorrect
+-	def_special BufferQuizPrizeItem
+-	def_special SetQuizLadyState_Complete
+-	def_special BufferQuizAuthorNameAndCheckIfLady
+-	def_special SetQuizLadyState_GivePrize
+-	def_special ClearQuizLadyPlayerAnswer
+-	def_special Script_QuizLadyOpenBagMenu
+-	def_special ClearQuizLadyQuestionAndAnswer
+-	def_special QuizLadySetCustomQuestion
+-	def_special QuizLadyTakePrizeForCustomQuiz
+-	def_special GetMysteryGiftCardStat
+-	def_special QuizLadyRecordCustomQuizData
+-	def_special QuizLadySetWaitingForChallenger
+-	def_special BufferQuizCorrectAnswer
+-	def_special BufferQuizPrizeName
+-	def_special QuizLadyPickNewQuestion
+-	def_special ShouldContestLadyShowGoOnAir
+-	def_special HasPlayerGivenContestLadyPokeblock
+-	def_special Script_BufferContestLadyCategoryAndMonName
+-	def_special OpenPokeblockCaseForContestLady
+-	def_special SetContestLadyGivenPokeblock
+-	def_special GetContestLadyMonSpecies
+-	def_special GetContestLadyCategory
+-	def_special PutLilycoveContestLadyShowOnTheAir
+-	def_special CloseBattlePikeCurtain
+-	def_special CallApprenticeFunction
+-	def_special ShouldTryGetTrainerScript
+-	def_special ShowMapNamePopup
+-	def_special ShowMapNamePopup
+-	def_special DoMirageTowerCeilingCrumble
+-	def_special SetMirageTowerVisibility
+-	def_special StartPlayerDescendMirageTower
+-	def_special BufferTMHMMoveName
+-	def_special IsWirelessAdapterConnected
+-	def_special TryBecomeLinkLeader
+-	def_special TryJoinLinkGroup
+-	def_special RunUnionRoom
+-	def_special ShowWirelessCommunicationScreen
+-	def_special InitUnionRoom
+-	def_special BufferUnionRoomPlayerName
+-	def_special WonderNews_GetRewardInfo
+-	def_special ChooseMonForWirelessMinigame
+-	def_special Script_ResetUnionRoomTrade
+-	def_special IsBadEggInParty
+-	def_special ValidateSavedWonderCard
+-	def_special HasAtLeastOneBerry
+-	def_special IsPokemonJumpSpeciesInParty
+-	def_special ShowPokemonJumpRecords
+-	def_special IsDodrioInParty
+-	def_special ShowDodrioBerryPickingRecords
+-	def_special OffsetCameraForBattle
+-	def_special GetDeptStoreDefaultFloorChoice
+-	def_special BufferVarsForIVRater
+-	def_special LinkContestWaitForConnection
+-	def_special GetWirelessCommType
+-	def_special LinkContestTryShowWirelessIndicator
+-	def_special LinkContestTryHideWirelessIndicator
+-	def_special IsWirelessContest
+-	def_special ShowRankingHallRecordsWindow
+-	def_special ScrollRankingHallRecordsWindow
+-	def_special ShowFrontierManiacMessage
+-	def_special IsContestWithRSPlayer
+-	def_special ClearLinkContestFlags
+-	def_special TryContestEModeLinkup
+-	def_special ShowScrollableMultichoice
+-	def_special ScrollableMultichoice_TryReturnToList
+-	def_special BufferBattleTowerElevatorFloors
+-	def_special TryStoreHeldItemsInPyramidBag
+-	def_special ChooseItemsToTossFromPyramidBag
+-	def_special DoBattlePyramidMonsHaveHeldItem
+-	def_special BattlePyramidChooseMonHeldItems
+-	def_special SetBattleTowerLinkPlayerGfx
+-	def_special ShowNatureGirlMessage
+-	def_special ShowBattlePointsWindow
+-	def_special UpdateBattlePointsWindow
+-	def_special CloseBattlePointsWindow
+-	def_special GiveFrontierBattlePoints
+-	def_special TakeFrontierBattlePoints
+-	def_special GetFrontierBattlePoints
+-	def_special ShowFrontierExchangeCornerItemIconWindow
+-	def_special CloseFrontierExchangeCornerItemIconWindow
+-	def_special DisplayBerryPowderVendorMenu
+-	def_special RemoveBerryPowderVendorMenu
+-	def_special HasEnoughBerryPowder
+-	def_special TakeBerryPowder
+-	def_special PrintPlayerBerryPowderAmount
+-	def_special ShowFrontierGamblerLookingMessage
+-	def_special ShowFrontierGamblerGoMessage
+-	def_special Script_DoRayquazaScene
+-	def_special OpenPokenavForTutorial
+-	def_special ScriptMenu_CreateStartMenuForPokenavTutorial
+-	def_special CountPlayerTrainerStars
+-	def_special BufferBattleFrontierTutorMoveName
+-	def_special CloseBattleFrontierTutorWindow
+-	def_special ScrollableMultichoice_RedrawPersistentMenu
+-	def_special ChooseMonForMoveTutor
+-	def_special GetBattleFrontierTutorMoveIndex
+-	def_special ScrollableMultichoice_ClosePersistentMenu
+-	def_special DoDeoxysRockInteraction
+-	def_special SetDeoxysRockPalette
+-	def_special CreateEnemyEventMon
+-	def_special StartMirageTowerDisintegration
+-	def_special StartMirageTowerShake
+-	def_special StartMirageTowerFossilFallAndSink
+-	def_special ChangeBoxPokemonNickname
+-	def_special GetPCBoxToSendMon
+-	def_special ShouldShowBoxWasFullMessage
+-	def_special SetMatchCallRegisteredFlag
+-	def_special DoDomeConfetti
+-	def_special CreateAbnormalWeatherEvent
+-	def_special GetAbnormalWeatherMapNameAndType
+-	def_special GetMartEmployeeObjectEventId
+-	def_special SaveForBattleTowerLink
+-	def_special Unused_SetWeatherSunny
+-	def_special SetUnlockedPokedexFlags
+-	def_special IsTrainerRegistered
+-	def_special ShouldDoBrailleRegicePuzzle
+-	def_special EnableNationalPokedex
+-	def_special ScriptMenu_CreateLilycoveSSTidalMultichoice
+-	def_special GetLilycoveSSTidalSelection
+-	def_special TurnOnTVScreen
+-	def_special SetMewAboveGrass
+-	def_special ShouldDistributeEonTicket
+-	def_special LinkRetireStatusWithBattleTowerPartner
+-	def_special BattleTowerReconnectLink
+-	def_special CallTrainerHillFunction
+-	def_special Script_DoRayquazaScene /* Listed twice*/
+-	def_special LoopWingFlapSE
+-	def_special DestroyMewEmergingGrassSprite
+-	def_special ShowBerryCrushRankings
+-	def_special TryBufferWaldaPhrase
+-	def_special DoWaldaNamingScreen
+-	def_special TryGetWallpaperWithWaldaPhrase
+-	def_special PlayerNotAtTrainerHillEntrance
+-	def_special GetBattlePyramidHint
+-	def_special LoadLinkContestPlayerPalettes
+-	def_special ShowTrainerHillRecords
+-	def_special PlayerFaceTrainerAfterBattle
+-	def_special ResetHealLocationFromDewford
+-	def_special IsLastMonThatKnowsSurf
+-	def_special CountPartyAliveNonEggMons
+-	def_special TryPrepareSecondApproachingTrainer
+-	def_special RemoveRecordsWindow
+-	def_special CloseDeptStoreElevatorWindow
+-	def_special TrySetBattleTowerLinkType
++	.include "data/specials_list.inc"
+diff --git a/data/specials_list.inc b/data/specials_list.inc
+new file mode 100644
+index 000000000..944ec391d
+--- /dev/null
++++ b/data/specials_list.inc
+@@ -0,0 +1,531 @@
++/* The special-index numbering, as a list on its own. */
++/* data/specials.inc turns it into the gSpecials pointer table; */
++/* data/specials_numbers.inc turns it into constants only, for a */
++/* file that uses the `special` macro without defining the table. */
++	def_special HealPlayerParty
++	def_special SetCableClubWarp
++	def_special DoCableClubWarp
++	def_special ReturnFromLinkRoom
++	def_special CleanupLinkRoomState
++	def_special ExitLinkRoom
++	def_special SetPlayerSecretBase
++	def_special CheckPlayerHasSecretBase
++	def_special EnterSecretBase
++	def_special ClearAndLeaveSecretBase
++	def_special MoveOutOfSecretBase
++	def_special IsCurSecretBaseOwnedByAnotherPlayer
++	def_special GetCurSecretBaseRegistrationValidity
++	def_special ToggleCurSecretBaseRegistry
++	def_special ShowSecretBaseDecorationMenu
++	def_special ShowSecretBaseRegistryMenu
++	def_special PrepSecretBaseBattleFlags
++	def_special GetSecretBaseOwnerAndState
++	def_special InitSecretBaseDecorationSprites
++	def_special SetDecoration
++	def_special GetObjectEventLocalIdByFlag
++	def_special GetSecretBaseTypeInFrontOfPlayer
++	def_special SetSecretBaseOwnerGfxId
++	def_special PutAwayDecorationIteration
++	def_special EnterNewlyCreatedSecretBase
++	def_special SetBattledOwnerFromResult
++	def_special DoSecretBasePCTurnOffEffect
++	def_special RecordMixingPlayerSpotTriggered
++	def_special TryBattleLinkup
++	def_special TryTradeLinkup
++	def_special TryRecordMixLinkup
++	def_special ValidateMixingGameLanguage
++	def_special CloseLink
++	def_special ColosseumPlayerSpotTriggered
++	def_special PlayerEnteredTradeSeat
++	def_special Script_StartWiredTrade
++	def_special CableClubSaveGame
++	def_special TryBerryBlenderLinkup
++	def_special GetLinkPartnerNames
++	def_special SpawnLinkPartnerObjectEvent
++	def_special SavePlayerParty
++	def_special LoadPlayerParty
++	def_special ChooseHalfPartyForBattle
++	def_special Script_ShowLinkTrainerCard
++	def_special ObjectEventInteractionGetBerryTreeData
++	def_special ObjectEventInteractionGetBerryName
++	def_special ObjectEventInteractionGetBerryCountString
++	def_special Bag_ChooseBerry
++	def_special ObjectEventInteractionPlantBerryTree
++	def_special ObjectEventInteractionPickBerryTree
++	def_special ObjectEventInteractionRemoveBerryTree
++	def_special ObjectEventInteractionWaterBerryTree
++	def_special PlayerHasBerries
++	def_special IsEnigmaBerryValid
++	def_special GetTrainerBattleMode
++	def_special ShowTrainerIntroSpeech
++	def_special ShowTrainerCantBattleSpeech
++	def_special GetTrainerFlag
++	def_special DoTrainerApproach
++	def_special PlayTrainerEncounterMusic
++	def_special ShouldTryRematchBattle
++	def_special IsTrainerReadyForRematch
++	def_special BattleSetup_StartRematchBattle
++	def_special ShowPokemonStorageSystemPC
++	def_special HasEnoughMonsForDoubleBattle
++	def_special TurnOffTVScreen
++	def_special DoTVShow
++	def_special DoPokeNews
++	def_special GetRandomActiveShowIdx
++	def_special GetSelectedTVShow
++	def_special InterviewBefore
++	def_special InterviewAfter
++	def_special IsLeadMonNicknamedOrNotEnglish
++	def_special SetContestCategoryStringVarForInterview
++	def_special GetNextActiveShowIfMassOutbreak
++	def_special IsTVShowAlreadyInQueue
++	def_special CheckForPlayersHouseNews
++	def_special GetMomOrDadStringForTVMessage
++	def_special ResetTVShowState
++	def_special GetContestWinnerId
++	def_special GetContestPlayerId
++	def_special GetNpcContestantLocalId
++	def_special BufferContestWinnerTrainerName
++	def_special BufferContestWinnerMonName
++	def_special BufferContestTrainerAndMonNames
++	def_special GetContestMonConditionRanking
++	def_special SetContestTrainerGfxIds
++	def_special TryEnterContestMon
++	def_special GetContestantNamesAtRank
++	def_special SetLinkContestPlayerGfx
++	def_special GetContestMonCondition
++	def_special HasMonWonThisContestBefore
++	def_special GiveMonContestRibbon
++	def_special IsContestDebugActive
++	def_special GiveMonArtistRibbon
++	def_special TryContestGModeLinkup
++	def_special SaveGame
++	def_special DoWateringBerryTreeAnim
++	def_special ShowEasyChatScreen
++	def_special ShowEasyChatProfile
++	def_special Script_GetCurrentMauvilleMan
++	def_special HasBardSongBeenChanged
++	def_special SaveBardSongLyrics
++	def_special HasHipsterTaughtWord
++	def_special SetHipsterTaughtWord
++	def_special HipsterTryTeachWord
++	def_special PlayBardSong
++	def_special SetMauvilleOldManObjEventGfx
++	def_special GenerateGiddyLine
++	def_special GiddyShouldTellAnotherTale
++	def_special StorytellerGetFreeStorySlot
++	def_special Script_StorytellerDisplayStory
++	def_special StorytellerStoryListMenu
++	def_special StorytellerUpdateStat
++	def_special Script_StorytellerInitializeRandomStat
++	def_special HasStorytellerAlreadyRecorded
++	def_special TraderMenuGetDecoration
++	def_special GetTraderTradedFlag
++	def_special DoesPlayerHaveNoDecorations
++	def_special IsDecorationCategoryFull
++	def_special TraderShowDecorationMenu
++	def_special TraderDoDecorationTrade
++	def_special GetSeedotSizeRecordInfo
++	def_special CompareSeedotSize
++	def_special GetLotadSizeRecordInfo
++	def_special CompareLotadSize
++	def_special TryPutNameRaterShowOnTheAir
++	def_special BufferMonNickname
++	def_special IsMonOTIDNotPlayers
++	def_special BufferTrendyPhraseString
++	def_special IsTrendyPhraseBoring
++	def_special BufferDeepLinkPhrase
++	def_special GetDewfordHallPaintingNameIndex
++	def_special SwapRegisteredBike
++	def_special CalculatePlayerPartyCount
++	def_special CountPartyNonEggMons
++	def_special CountPartyAliveNonEggMons_IgnoreVar0x8004Slot
++	def_special ShouldReadyContestArtist
++	def_special SaveMuseumContestPainting
++	def_special DoesContestCategoryHaveMuseumPainting
++	def_special CountPlayerMuseumPaintings
++	def_special ShowContestPainting  @ Unused, redundant with showcontestpainting command
++	def_special MauvilleGymSetDefaultBarriers
++	def_special MauvilleGymPressSwitch
++	def_special ShowFieldMessageStringVar4
++	def_special DrawWholeMapView
++	def_special StorePlayerCoordsInVars
++	def_special MauvilleGymDeactivatePuzzle
++	def_special PetalburgGymSlideOpenRoomDoors
++	def_special PetalburgGymUnlockRoomDoors
++	def_special GetPlayerTrainerIdOnesDigit
++	def_special GetPlayerBigGuyGirlString
++	def_special GetRivalSonDaughterString
++	def_special SetHiddenItemFlag
++	def_special CableCarWarp
++	def_special CableCar
++	def_special Overworld_PlaySpecialMapMusic
++	def_special StartWallClock
++	def_special Special_ViewWallClock
++	def_special ChooseStarter
++	def_special StartWallyTutorialBattle
++	def_special ChangePokemonNickname
++	def_special ChoosePartyMon
++	def_special GetFirstFreePokeblockSlot
++	def_special DoBerryBlending
++	def_special PlayRoulette
++	def_special IsFanClubMemberFanOfPlayer
++	def_special GetNumFansOfPlayerInTrainerFanClub
++	def_special BufferFanClubTrainerName
++	def_special TryLoseFansFromPlayTimeAfterLinkBattle
++	def_special TryLoseFansFromPlayTime
++	def_special SetPlayerGotFirstFans
++	def_special UpdateTrainerFanClubGameClear
++	def_special Script_TryGainNewFanFromCounter
++	def_special RockSmashWildEncounter
++	def_special GabbyAndTyGetBattleNum
++	def_special GabbyAndTyAfterInterview
++	def_special GabbyAndTyBeforeInterview
++	def_special DoTVShowInSearchOfTrainers
++	def_special IsGabbyAndTyShowOnTheAir
++	def_special GabbyAndTyGetLastQuote
++	def_special GabbyAndTyGetLastBattleTrivia
++	def_special GetGabbyAndTyLocalIds
++	def_special GetBattleOutcome
++	def_special GetDaycareMonNicknames
++	def_special GetDaycareState
++	def_special RejectEggFromDayCare
++	def_special GiveEggFromDaycare
++	def_special SetDaycareCompatibilityString
++	def_special GetSelectedMonNicknameAndSpecies
++	def_special StoreSelectedPokemonInDaycare
++	def_special ChooseSendDaycareMon
++	def_special ShowDaycareLevelMenu
++	def_special GetNumLevelsGainedFromDaycare
++	def_special GetDaycareCost
++	def_special TakePokemonFromDaycare
++	def_special ScriptHatchMon
++	def_special EggHatch
++	def_special CheckDaycareMonReceivedMail
++	def_special ShowLinkBattleRecords
++	def_special IsEnoughForCostInVar0x8005
++	def_special SubtractMoneyFromVar0x8005
++	def_special TryFieldPoisonWhiteOut
++	def_special SetCB2WhiteOut
++	def_special RotatingGate_InitPuzzle
++	def_special RotatingGate_InitPuzzleAndGraphics
++	def_special SetSSTidalFlag
++	def_special ResetSSTidalFlag
++	def_special EnterSafariMode
++	def_special ExitSafariMode
++	def_special GetPokeblockFeederInFront
++	def_special OpenPokeblockCaseOnFeeder
++	def_special IsMirageIslandPresent
++	def_special UpdateShoalTideFlag
++	def_special InitBirchState
++	def_special ScriptGetPokedexInfo
++	def_special ShowPokedexRatingMessage
++	def_special DoPCTurnOnEffect
++	def_special DoPCTurnOffEffect
++	def_special SetDeptStoreFloor
++	def_special DoLotteryCornerComputerEffect
++	def_special EndLotteryCornerComputerEffect
++	def_special ChooseMonForMoveRelearner
++	def_special MoveDeleterChooseMoveToForget
++	def_special MoveDeleterForgetMove
++	def_special BufferMoveDeleterNicknameAndMove
++	def_special GetNumMovesSelectedMonHas
++	def_special TeachMoveRelearnerMove
++	def_special GetRecordedCyclingRoadResults
++	def_special Special_BeginCyclingRoadChallenge
++	def_special GetPlayerAvatarBike
++	def_special FinishCyclingRoadChallenge
++	def_special UpdateCyclingRoadState
++	def_special GetLeadMonFriendshipScore
++	def_special CallFrontierUtilFunc
++	def_special CallBattleTowerFunc
++	def_special CallBattleDomeFunction
++	def_special CallBattlePalaceFunction
++	def_special CopyEReaderTrainerGreeting
++	def_special DoSpecialTrainerBattle
++	def_special CallBattleArenaFunction
++	def_special CallBattleFactoryFunction
++	def_special CallBattlePikeFunction
++	def_special CallBattlePyramidFunction
++	def_special StopMapMusic
++	def_special CallVerdanturfTentFunction
++	def_special CallFallarborTentFunction
++	def_special CallSlateportTentFunction
++	def_special ChoosePartyForBattleFrontier
++	def_special ValidateEReaderTrainer
++	def_special GetBattleTowerSinglesStreak
++	def_special ReducePlayerPartyToSelectedMons
++	def_special BedroomPC
++	def_special PlayerPC
++	def_special FieldShowRegionMap
++	def_special GetInGameTradeSpeciesInfo
++	def_special CreateInGameTradePokemon
++	def_special DoInGameTradeScene
++	def_special GetTradeSpecies
++	def_special GetWeekCount
++	def_special RetrieveLotteryNumber
++	def_special PickLotteryCornerTicket
++	def_special ShowBerryBlenderRecordWindow
++	def_special ResetTrickHouseNuggetFlag
++	def_special SetTrickHouseNuggetFlag
++	def_special ScriptMenu_CreatePCMultichoice
++	def_special AccessHallOfFamePC
++	def_special Special_ShowDiploma
++	def_special CheckLeadMonCool
++	def_special CheckLeadMonBeauty
++	def_special CheckLeadMonCute
++	def_special CheckLeadMonSmart
++	def_special CheckLeadMonTough
++	def_special LookThroughPorthole
++/*	def_special DoSoftReset*/
++	def_special GameClear
++	def_special MoveElevator
++	def_special ShowGlassWorkshopMenu
++	def_special SpawnCameraObject
++	def_special RemoveCameraObject
++	def_special GetPokeblockNameByMonNature
++	def_special GetSecretBaseNearbyMapName
++	def_special CheckRelicanthWailord
++	def_special ShouldDoBrailleRegirockEffectOld
++	def_special DoOrbEffect
++	def_special FadeOutOrbEffect
++	def_special WaitWeather
++	def_special BufferEReaderTrainerName
++	def_special GetSlotMachineId
++	def_special GetPlayerFacingDirection
++	def_special FoundAbandonedShipRoom1Key
++	def_special FoundAbandonedShipRoom2Key
++	def_special FoundAbandonedShipRoom4Key
++	def_special FoundAbandonedShipRoom6Key
++	def_special LeadMonHasEffortRibbon
++	def_special GiveLeadMonEffortRibbon
++	def_special Special_AreLeadMonEVsMaxedOut
++	def_special Script_FacePlayer
++	def_special Script_ClearHeldMovement
++	def_special InitRoamer
++	def_special TryUpdateRusturfTunnelState
++	def_special IsGrassTypeInParty
++	def_special DoContestHallWarp
++	def_special LoadWallyZigzagoon
++	def_special IsStarterInParty
++	def_special CopyCurSecretBaseOwnerName_StrVar1
++	def_special ScriptCheckFreePokemonStorageSpace
++	def_special DoSealedChamberShakingEffect_Long
++	def_special ShowDeptStoreElevatorFloorSelect
++	def_special InteractWithShieldOrTVDecoration
++	def_special IsPokerusInParty
++	def_special SetSootopolisGymCrackedIceMetatiles
++	def_special ShakeCamera
++	def_special StartGroudonKyogreBattle
++	def_special BattleSetup_StartLegendaryBattle
++	def_special StartRegiBattle
++	def_special SetTrainerFacingDirection
++	def_special DoSealedChamberShakingEffect_Short
++	def_special FoundBlackGlasses
++	def_special StartDroughtWeatherBlend
++	def_special DoDiveWarp
++	def_special DoFallWarp
++	def_special ShowContestEntryMonPic
++	def_special HideContestEntryMonPic
++	def_special SetEReaderTrainerGfxId
++	def_special BattleSetup_StartLatiBattle
++	def_special SetRoute119Weather
++	def_special SetRoute123Weather
++	def_special GetContestMultiplayerId
++	def_special ScriptGetPartyMonSpecies
++	def_special IsSelectedMonEgg
++	def_special TryInitBattleTowerAwardManObjectEvent
++	def_special MoveOutOfSecretBaseFromOutside
++	def_special LoadPlayerBag
++	def_special Script_FadeOutMapMusic
++	def_special SetPacifidlogTMReceivedDay
++	def_special GetDaysUntilPacifidlogTMAvailable
++	def_special HasAllHoennMons
++	def_special MonOTNameNotPlayer
++	def_special BufferLottoTicketNumber
++	def_special TryHideBattleTowerReporter
++	def_special DoesPartyHaveEnigmaBerry
++	def_special GenerateContestRand
++	def_special SetChampionSaveWarp
++	def_special TryPutTreasureInvestigatorsOnAir
++	def_special TryPutLotteryWinnerReportOnAir
++	def_special TryPutTrainerFanClubOnAir
++	def_special ShouldHideFanClubInterviewer
++	def_special ShowGlassWorkshopMenu
++	def_special PutFanClubSpecialOnTheAir
++	def_special IncrementDailyPlantedBerries
++	def_special IncrementDailyPickedBerries
++	def_special InitSecretBaseVars
++	def_special CheckInteractedWithFriendsSandOrnament
++	def_special DeclinedSecretBaseBattle
++	def_special DrewSecretBaseBattle
++	def_special WonSecretBaseBattle
++	def_special LostSecretBaseBattle
++	def_special CheckInteractedWithFriendsDollDecor
++	def_special CheckInteractedWithFriendsCushionDecor
++	def_special CheckInteractedWithFriendsFurnitureBottom
++	def_special CheckInteractedWithFriendsFurnitureMiddle
++	def_special CheckInteractedWithFriendsFurnitureTop
++	def_special CheckInteractedWithFriendsPosterDecor
++	def_special SetLilycoveLadyGfx
++	def_special Script_GetLilycoveLadyId
++	def_special GetFavorLadyState
++	def_special BufferFavorLadyRequest
++	def_special HasAnotherPlayerGivenFavorLadyItem
++	def_special BufferFavorLadyItemName
++	def_special BufferFavorLadyPlayerName
++	def_special DidFavorLadyLikeItem
++	def_special Script_FavorLadyOpenBagMenu
++	def_special Script_DoesFavorLadyLikeItem
++	def_special IsFavorLadyThresholdMet
++	def_special FavorLadyGetPrize
++	def_special SetFavorLadyState_Complete
++	def_special GetQuizLadyState
++	def_special GetQuizAuthor
++	def_special IsQuizLadyWaitingForChallenger
++	def_special QuizLadyShowQuizQuestion
++	def_special QuizLadyGetPlayerAnswer
++	def_special IsQuizAnswerCorrect
++	def_special BufferQuizPrizeItem
++	def_special SetQuizLadyState_Complete
++	def_special BufferQuizAuthorNameAndCheckIfLady
++	def_special SetQuizLadyState_GivePrize
++	def_special ClearQuizLadyPlayerAnswer
++	def_special Script_QuizLadyOpenBagMenu
++	def_special ClearQuizLadyQuestionAndAnswer
++	def_special QuizLadySetCustomQuestion
++	def_special QuizLadyTakePrizeForCustomQuiz
++	def_special GetMysteryGiftCardStat
++	def_special QuizLadyRecordCustomQuizData
++	def_special QuizLadySetWaitingForChallenger
++	def_special BufferQuizCorrectAnswer
++	def_special BufferQuizPrizeName
++	def_special QuizLadyPickNewQuestion
++	def_special ShouldContestLadyShowGoOnAir
++	def_special HasPlayerGivenContestLadyPokeblock
++	def_special Script_BufferContestLadyCategoryAndMonName
++	def_special OpenPokeblockCaseForContestLady
++	def_special SetContestLadyGivenPokeblock
++	def_special GetContestLadyMonSpecies
++	def_special GetContestLadyCategory
++	def_special PutLilycoveContestLadyShowOnTheAir
++	def_special CloseBattlePikeCurtain
++	def_special CallApprenticeFunction
++	def_special ShouldTryGetTrainerScript
++	def_special ShowMapNamePopup
++	def_special ShowMapNamePopup
++	def_special DoMirageTowerCeilingCrumble
++	def_special SetMirageTowerVisibility
++	def_special StartPlayerDescendMirageTower
++	def_special BufferTMHMMoveName
++	def_special IsWirelessAdapterConnected
++	def_special TryBecomeLinkLeader
++	def_special TryJoinLinkGroup
++	def_special RunUnionRoom
++	def_special ShowWirelessCommunicationScreen
++	def_special InitUnionRoom
++	def_special BufferUnionRoomPlayerName
++	def_special WonderNews_GetRewardInfo
++	def_special ChooseMonForWirelessMinigame
++	def_special Script_ResetUnionRoomTrade
++	def_special IsBadEggInParty
++	def_special ValidateSavedWonderCard
++	def_special HasAtLeastOneBerry
++	def_special IsPokemonJumpSpeciesInParty
++	def_special ShowPokemonJumpRecords
++	def_special IsDodrioInParty
++	def_special ShowDodrioBerryPickingRecords
++	def_special OffsetCameraForBattle
++	def_special GetDeptStoreDefaultFloorChoice
++	def_special BufferVarsForIVRater
++	def_special LinkContestWaitForConnection
++	def_special GetWirelessCommType
++	def_special LinkContestTryShowWirelessIndicator
++	def_special LinkContestTryHideWirelessIndicator
++	def_special IsWirelessContest
++	def_special ShowRankingHallRecordsWindow
++	def_special ScrollRankingHallRecordsWindow
++	def_special ShowFrontierManiacMessage
++	def_special IsContestWithRSPlayer
++	def_special ClearLinkContestFlags
++	def_special TryContestEModeLinkup
++	def_special ShowScrollableMultichoice
++	def_special ScrollableMultichoice_TryReturnToList
++	def_special BufferBattleTowerElevatorFloors
++	def_special TryStoreHeldItemsInPyramidBag
++	def_special ChooseItemsToTossFromPyramidBag
++	def_special DoBattlePyramidMonsHaveHeldItem
++	def_special BattlePyramidChooseMonHeldItems
++	def_special SetBattleTowerLinkPlayerGfx
++	def_special ShowNatureGirlMessage
++	def_special ShowBattlePointsWindow
++	def_special UpdateBattlePointsWindow
++	def_special CloseBattlePointsWindow
++	def_special GiveFrontierBattlePoints
++	def_special TakeFrontierBattlePoints
++	def_special GetFrontierBattlePoints
++	def_special ShowFrontierExchangeCornerItemIconWindow
++	def_special CloseFrontierExchangeCornerItemIconWindow
++	def_special DisplayBerryPowderVendorMenu
++	def_special RemoveBerryPowderVendorMenu
++	def_special HasEnoughBerryPowder
++	def_special TakeBerryPowder
++	def_special PrintPlayerBerryPowderAmount
++	def_special ShowFrontierGamblerLookingMessage
++	def_special ShowFrontierGamblerGoMessage
++	def_special Script_DoRayquazaScene
++	def_special OpenPokenavForTutorial
++	def_special ScriptMenu_CreateStartMenuForPokenavTutorial
++	def_special CountPlayerTrainerStars
++	def_special BufferBattleFrontierTutorMoveName
++	def_special CloseBattleFrontierTutorWindow
++	def_special ScrollableMultichoice_RedrawPersistentMenu
++	def_special ChooseMonForMoveTutor
++	def_special GetBattleFrontierTutorMoveIndex
++	def_special ScrollableMultichoice_ClosePersistentMenu
++	def_special DoDeoxysRockInteraction
++	def_special SetDeoxysRockPalette
++	def_special CreateEnemyEventMon
++	def_special StartMirageTowerDisintegration
++	def_special StartMirageTowerShake
++	def_special StartMirageTowerFossilFallAndSink
++	def_special ChangeBoxPokemonNickname
++	def_special GetPCBoxToSendMon
++	def_special ShouldShowBoxWasFullMessage
++	def_special SetMatchCallRegisteredFlag
++	def_special DoDomeConfetti
++	def_special CreateAbnormalWeatherEvent
++	def_special GetAbnormalWeatherMapNameAndType
++	def_special GetMartEmployeeObjectEventId
++	def_special SaveForBattleTowerLink
++	def_special Unused_SetWeatherSunny
++	def_special SetUnlockedPokedexFlags
++	def_special IsTrainerRegistered
++	def_special ShouldDoBrailleRegicePuzzle
++	def_special EnableNationalPokedex
++	def_special ScriptMenu_CreateLilycoveSSTidalMultichoice
++	def_special GetLilycoveSSTidalSelection
++	def_special TurnOnTVScreen
++	def_special SetMewAboveGrass
++	def_special ShouldDistributeEonTicket
++	def_special LinkRetireStatusWithBattleTowerPartner
++	def_special BattleTowerReconnectLink
++	def_special CallTrainerHillFunction
++	def_special Script_DoRayquazaScene /* Listed twice*/
++	def_special LoopWingFlapSE
++	def_special DestroyMewEmergingGrassSprite
++	def_special ShowBerryCrushRankings
++	def_special TryBufferWaldaPhrase
++	def_special DoWaldaNamingScreen
++	def_special TryGetWallpaperWithWaldaPhrase
++	def_special PlayerNotAtTrainerHillEntrance
++	def_special GetBattlePyramidHint
++	def_special LoadLinkContestPlayerPalettes
++	def_special ShowTrainerHillRecords
++	def_special PlayerFaceTrainerAfterBattle
++	def_special ResetHealLocationFromDewford
++	def_special IsLastMonThatKnowsSurf
++	def_special CountPartyAliveNonEggMons
++	def_special TryPrepareSecondApproachingTrainer
++	def_special RemoveRecordsWindow
++	def_special CloseDeptStoreElevatorWindow
++	def_special TrySetBattleTowerLinkType
+diff --git a/data/specials_numbers.inc b/data/specials_numbers.inc
+new file mode 100644
+index 000000000..3a1934c4a
+--- /dev/null
++++ b/data/specials_numbers.inc
+@@ -0,0 +1,15 @@
++/* The special indices, without the gSpecials table. */
++/* A file using the `special` macro needs SPECIAL_x to be a constant it can */
++/* resolve while assembling. Declaring those symbols .global instead left a */
++/* 16-bit relocation against a global symbol, which cannot appear in a PIE */
++/* binary -- that single relocation blocked linking the desktop build */
++/* position-independent, and with it the only way to load above 4GB and */
++/* catch pointer truncation off-device. See android-build/ARM64-PORT.md. */
++	.macro def_special ptr
++	.set SPECIAL_\ptr, __special__
++	.set __special__, __special__ + 1
++	.endm
++
++.set __special__, 0
++	.include "data/specials_list.inc"
++	.purgem def_special
 diff --git a/include/gba/defines.h b/include/gba/defines.h
 index edd27b6b7..46629408c 100755
 --- a/include/gba/defines.h
@@ -13403,6 +14527,66 @@ index ba8827690..3b4d51872 100644
      .part1 = TUNE,
      .tuneValue2 = C_V + 16,
      .cont = {VOICE, 0}, // part0 jumps here with gotoCmd
+diff --git a/src/malloc.c b/src/malloc.c
+index 10d5d4d74..7af5810ae 100644
+--- a/src/malloc.c
++++ b/src/malloc.c
+@@ -1,3 +1,9 @@
++#if defined(PORTABLE) && __SIZEOF_POINTER__ > 4 && !defined(_WIN32)
++#include <sys/mman.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <stdint.h>
++#endif
+ #include "global.h"
+ #include "malloc.h"
+ 
+@@ -185,8 +191,45 @@ bool32 CheckMemBlockInternal(void *heapStart, void *pointer)
+     return TRUE;
+ }
+ 
++#if defined(PORTABLE) && __SIZEOF_POINTER__ > 4 && !defined(_WIN32)
++// The desktop 64-bit build links -no-pie and loads low, so gHeap sits under
++// 4GB and a pointer into it survives being truncated to 32 bits. Android is
++// PIE and maps high, so the same code faults there. That gap is why every
++// pointer-width bug so far was found on a phone rather than in CI.
++//
++// POKE_HIGH_HEAP=1 closes it: the heap is remapped above 4GB, so any code path
++// that stores an allocated pointer in 32 bits faults here, in a build with
++// full symbols and a debugger, instead of on a device.
++static void *HighHeap(void *fallback, u32 heapSize)
++{
++    static void *mapped;
++    const char *opt = getenv("POKE_HIGH_HEAP");
++    void *hint = (void *)(uintptr_t)0x0000200000000000ULL; // ~32TB, well clear of 32 bits
++
++    if (opt == NULL || *opt == '0')
++        return fallback;
++    if (mapped != NULL)
++        return mapped;
++
++    mapped = mmap(hint, heapSize, PROT_READ | PROT_WRITE,
++                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    if (mapped == MAP_FAILED || (uintptr_t)mapped <= 0xFFFFFFFFULL)
++    {
++        // Refuse to run a test that silently is not testing anything.
++        fprintf(stderr, "POKE_HIGH_HEAP: could not map the heap above 4GB\n");
++        mapped = NULL;
++        return fallback;
++    }
++    fprintf(stderr, "POKE_HIGH_HEAP: heap at %p (%u bytes)\n", mapped, heapSize);
++    return mapped;
++}
++#else
++#define HighHeap(fallback, heapSize) (fallback)
++#endif
++
+ void InitHeap(void *heapStart, u32 heapSize)
+ {
++    heapStart = HighHeap(heapStart, heapSize);
+     sHeapStart = heapStart;
+     sHeapSize = heapSize;
+     PutFirstMemBlockHeader(heapStart, heapSize);
 diff --git a/src/menu.c b/src/menu.c
 index dd43e310d..1b1f7e7b2 100644
 --- a/src/menu.c
@@ -13479,7 +14663,7 @@ index fd5982ff3..52afbe082 100644
      dma->control = control >> 16;
  
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..fe1dd5458 100644
+index e6f4aaf6a..07fc80d8b 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
 @@ -57,6 +57,7 @@ struct SiiRtcInfo internalClock;
@@ -13490,7 +14674,7 @@ index e6f4aaf6a..fe1dd5458 100644
  static char sConfigPath[1024] = "pokeemerald.cfg";
  static u8 sBorderBackground;
  static bool sHasBorderBackgroundConfig;
-@@ -87,8 +88,194 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
+@@ -87,8 +88,240 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
  static void DrawTouchControls(void);
  #endif
  
@@ -13546,6 +14730,8 @@ index e6f4aaf6a..fe1dd5458 100644
 +    case SIGBUS:  name = "SIGBUS (misaligned)";      break;
 +    case SIGILL:  name = "SIGILL (bad instruction)"; break;
 +    case SIGFPE:  name = "SIGFPE";                   break;
++    case SIGABRT: name = "SIGABRT (abort/heap check)"; break;
++    case SIGTRAP: name = "SIGTRAP (fatal check)";    break;
 +    default:      name = "signal";                   break;
 +    }
 +
@@ -13628,8 +14814,14 @@ index e6f4aaf6a..fe1dd5458 100644
 +    raise(sig);
 +}
 +
-+static const int sCrashSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE };
-+static struct sigaction sOldHandlers[4];
++// SIGABRT matters as much as SIGSEGV here: bionic aborts on a detected heap
++// corruption, a fortify violation or a failed stack check, and a 64-bit port
++// writing through a truncated pointer corrupts the heap long before it
++// touches an unmapped page. An uncaught SIGABRT is exactly what "the app
++// just closed and there was no dialog" looks like. SIGTRAP is bionic's
++// other fatal-check signal.
++static const int sCrashSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP };
++static struct sigaction sOldHandlers[6];
 +
 +static const struct sigaction *FindOldHandler(int sig)
 +{
@@ -13646,9 +14838,21 @@ index e6f4aaf6a..fe1dd5458 100644
 +    struct sigaction sa;
 +    size_t i;
 +
++    // Without an alternate stack a stack-overflow SIGSEGV re-faults the instant
++    // the handler pushes a frame, and the process dies silently.
++    {
++        static char altStack[65536]; // fixed: SIGSTKSZ is not a constant on modern glibc
++        stack_t ss;
++
++        SDL_memset(&ss, 0, sizeof(ss));
++        ss.ss_sp = altStack;
++        ss.ss_size = sizeof(altStack);
++        sigaltstack(&ss, NULL);
++    }
++
 +    SDL_memset(&sa, 0, sizeof(sa));
 +    sa.sa_sigaction = CrashHandler;
-+    sa.sa_flags = SA_SIGINFO;
++    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
 +
 +    for (i = 0; i < sizeof(sCrashSignals) / sizeof(sCrashSignals[0]); i++)
 +        sigaction(sCrashSignals[i], &sa, &sOldHandlers[i]);
@@ -13659,24 +14863,50 @@ index e6f4aaf6a..fe1dd5458 100644
 +
 +// Shows the report left by a previous crash, from the normal startup path
 +// where the UI thread is healthy, then removes it so it is only shown once.
++static char sPrevCrash[2048];
++
 +static void ReportPreviousCrash(void)
 +{
-+    char buf[2048];
 +    int fd = open(sCrashPath, O_RDONLY);
 +    ssize_t n;
 +
 +    if (fd < 0)
 +        return;
-+    n = read(fd, buf, sizeof(buf) - 1);
++    n = read(fd, sPrevCrash, sizeof(sPrevCrash) - 1);
 +    close(fd);
-+    if (n > 0)
++    if (n <= 0)
 +    {
-+        buf[n] = '\0';
-+        SDL_Log("previous crash:\n%s", buf);
-+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-+                                 "pokeemerald crashed last time", buf, NULL);
++        remove(sCrashPath);
++        return;
 +    }
-+    remove(sCrashPath);
++    sPrevCrash[n] = '\0';
++    SDL_Log("previous crash:\n%s", sPrevCrash);
++    // No window exists yet, so on Android this box has no activity to attach to
++    // and can fail. Keep the report and the file until a box actually shows;
++    // ShowPreviousCrash() retries once the window is up.
++    if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
++                                 "pokeemerald crashed last time",
++                                 sPrevCrash, NULL) == 0)
++    {
++        sPrevCrash[0] = '\0';
++        remove(sCrashPath);
++    }
++}
++
++// Second attempt, with the window as parent. Only the report surviving the
++// first attempt gets here, and the file is kept until one of them works, so a
++// crash report is never lost to a message box that quietly did nothing.
++static void ShowPreviousCrash(SDL_Window *parent)
++{
++    if (sPrevCrash[0] == '\0')
++        return;
++    if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
++                                 "pokeemerald crashed last time",
++                                 sPrevCrash, parent) == 0)
++    {
++        sPrevCrash[0] = '\0';
++        remove(sCrashPath);
++    }
 +}
 +
  int main(int argc, char **argv)
@@ -13685,7 +14915,7 @@ index e6f4aaf6a..fe1dd5458 100644
      // Open an output console on Windows
  #ifdef _WIN32
      AllocConsole() ;
-@@ -125,9 +312,14 @@ int main(int argc, char **argv)
+@@ -125,9 +358,14 @@ int main(int argc, char **argv)
      {
          SDL_snprintf(sSavePath, sizeof(sSavePath), "%spokeemerald.sav", prefPath);
          SDL_snprintf(sConfigPath, sizeof(sConfigPath), "%spokeemerald.cfg", prefPath);
@@ -13700,7 +14930,16 @@ index e6f4aaf6a..fe1dd5458 100644
      ReadSaveFile(sSavePath);
      ReadConfigFile();
  
-@@ -1057,16 +1249,75 @@ u16 GetXInputKeys()
+@@ -156,6 +394,8 @@ int main(int argc, char **argv)
+         return 1;
+     }
+ 
++    ShowPreviousCrash(sdlWindow);
++
+     SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
+     SDL_RenderClear(sdlRenderer);
+     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+@@ -1057,16 +1297,75 @@ u16 GetXInputKeys()
  }
  #endif // _WIN32
  
@@ -13861,6 +15100,49 @@ index 000000000..0c93522d1
 +}
 +
 +#endif
+diff --git a/src/pokemon_animation.c b/src/pokemon_animation.c
+index 0ab025fd9..147eee481 100644
+--- a/src/pokemon_animation.c
++++ b/src/pokemon_animation.c
+@@ -902,10 +902,14 @@ u8 GetSpeciesBackAnimSet(u16 species)
+ // as 0xFFFFXXXX instead of the desired 0x02YYXXXX.
+ // By dumb luck, this is not an issue in vanilla. However,
+ // changing the link order revealed this bug.
++// The pointer goes through PackPtr/UnpackPtr because gSprites is a global and
++// a 64-bit build puts globals above 4GB, so the top half of the address does
++// not survive these two s16 slots. Reassembly is unchanged -- a handle shifts
++// and masks exactly as the address used to.
+ #if MODERN || defined(BUGFIX)
+-#define ANIM_SPRITE(taskId)   ((struct Sprite *)((gTasks[taskId].tPtrHi << 16) | ((u16)gTasks[taskId].tPtrLo)))
++#define ANIM_SPRITE(taskId)   ((struct Sprite *)UnpackPtr((gTasks[taskId].tPtrHi << 16) | ((u16)gTasks[taskId].tPtrLo)))
+ #else
+-#define ANIM_SPRITE(taskId)   ((struct Sprite *)((gTasks[taskId].tPtrHi << 16) | (gTasks[taskId].tPtrLo)))
++#define ANIM_SPRITE(taskId)   ((struct Sprite *)UnpackPtr((gTasks[taskId].tPtrHi << 16) | (gTasks[taskId].tPtrLo)))
+ #endif //MODERN || BUGFIX
+ 
+ static void Task_HandleMonAnimation(u8 taskId)
+@@ -941,8 +945,8 @@ static void Task_HandleMonAnimation(u8 taskId)
+ void LaunchAnimationTaskForFrontSprite(struct Sprite *sprite, u8 frontAnimId)
+ {
+     u8 taskId = CreateTask(Task_HandleMonAnimation, 128);
+-    gTasks[taskId].tPtrHi = (u32)(sprite) >> 16;
+-    gTasks[taskId].tPtrLo = (u32)(sprite);
++    gTasks[taskId].tPtrHi = PackPtr(sprite) >> 16;
++    gTasks[taskId].tPtrLo = PackPtr(sprite);
+     gTasks[taskId].tAnimId = frontAnimId;
+ }
+ 
+@@ -958,8 +962,8 @@ void LaunchAnimationTaskForBackSprite(struct Sprite *sprite, u8 backAnimSet)
+     u8 nature, taskId, animId, battler;
+ 
+     taskId = CreateTask(Task_HandleMonAnimation, 128);
+-    gTasks[taskId].tPtrHi = (u32)(sprite) >> 16;
+-    gTasks[taskId].tPtrLo = (u32)(sprite);
++    gTasks[taskId].tPtrHi = PackPtr(sprite) >> 16;
++    gTasks[taskId].tPtrLo = PackPtr(sprite);
+ 
+     battler = sprite->data[0];
+     nature = GetNature(&gPlayerParty[gBattlerPartyIndexes[battler]]);
 diff --git a/src/pokemon_jump.c b/src/pokemon_jump.c
 index 326512acf..87c669994 100644
 --- a/src/pokemon_jump.c
