@@ -5113,7 +5113,7 @@ index f4847abdb..832ee9532 100755
      u8 tuneValue2; // 0x19
      u8 cont[2]; // 0x1A
 diff --git a/include/global.h b/include/global.h
-index 1653b3a07..132e22d66 100644
+index 1653b3a07..0e87e1251 100644
 --- a/include/global.h
 +++ b/include/global.h
 @@ -132,6 +132,20 @@ int strcmp(const char *, const char*);
@@ -5137,6 +5137,17 @@ index 1653b3a07..132e22d66 100644
  // T2_READ_8 is a duplicate to remain consistent with each group.
  #define T2_READ_8(ptr)  ((ptr)[0])
  #define T2_READ_16(ptr) ((ptr)[0] + ((ptr)[1] << 8))
+@@ -1105,4 +1119,10 @@ struct MapPosition
+     s8 elevation;
+ };
+ 
++// Pack a pointer into a 32-bit handle and back. See src/pointer_handle.c:
++// used wherever a pointer is stored by splitting it into 16-bit halves, which
++// truncates on a 64-bit build. Identity casts on a 32-bit build.
++u32 PackPtr(const void *ptr);
++void *UnpackPtr(u32 handle);
++
+ #endif // GUARD_GLOBAL_H
 diff --git a/include/save.h b/include/save.h
 index 41913d1df..6e2685680 100755
 --- a/include/save.h
@@ -11905,6 +11916,28 @@ index d4fae17ea..f3e6f40e3 100644
          break;
      }
  }
+diff --git a/src/braille_puzzles.c b/src/braille_puzzles.c
+index 7ac88091e..3b8c51c01 100644
+--- a/src/braille_puzzles.c
++++ b/src/braille_puzzles.c
+@@ -267,13 +267,13 @@ bool8 FldEff_UsePuzzleEffect(void)
+ 
+     if (sIsRegisteelPuzzle == TRUE)
+     {
+-        gTasks[taskId].data[8] = (u32)UseRegisteelHm_Callback >> 16;
+-        gTasks[taskId].data[9] = (u32)UseRegisteelHm_Callback;
++        gTasks[taskId].data[8] = PackPtr(UseRegisteelHm_Callback) >> 16;
++        gTasks[taskId].data[9] = PackPtr(UseRegisteelHm_Callback);
+     }
+     else
+     {
+-        gTasks[taskId].data[8] = (u32)UseRegirockHm_Callback >> 16;
+-        gTasks[taskId].data[9] = (u32)UseRegirockHm_Callback;
++        gTasks[taskId].data[8] = PackPtr(UseRegirockHm_Callback) >> 16;
++        gTasks[taskId].data[9] = PackPtr(UseRegirockHm_Callback);
+     }
+     return FALSE;
+ }
 diff --git a/src/contest_ai.c b/src/contest_ai.c
 index 443e57f8b..3c8839713 100644
 --- a/src/contest_ai.c
@@ -13194,6 +13227,153 @@ index 5dcc4b3c0..c79a5f392 100644
  }
  
  void FieldEffectFreeGraphicsResources(struct Sprite *sprite)
+diff --git a/src/fldeff_cut.c b/src/fldeff_cut.c
+index 0fd9263e5..4fd834f48 100644
+--- a/src/fldeff_cut.c
++++ b/src/fldeff_cut.c
+@@ -285,8 +285,8 @@ bool8 FldEff_UseCutOnGrass(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)StartCutGrassFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartCutGrassFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartCutGrassFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartCutGrassFieldEffect);
+     IncrementGameStat(GAME_STAT_USED_CUT);
+     return FALSE;
+ }
+@@ -301,8 +301,8 @@ bool8 FldEff_UseCutOnTree(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)StartCutTreeFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartCutTreeFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartCutTreeFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartCutTreeFieldEffect);
+     IncrementGameStat(GAME_STAT_USED_CUT);
+     return FALSE;
+ }
+diff --git a/src/fldeff_dig.c b/src/fldeff_dig.c
+index c3ab989cd..fb1344e0d 100644
+--- a/src/fldeff_dig.c
++++ b/src/fldeff_dig.c
+@@ -39,8 +39,8 @@ bool8 FldEff_UseDig(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)StartDigFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartDigFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartDigFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartDigFieldEffect);
+     if (!ShouldDoBrailleDigEffect())
+         SetPlayerAvatarTransitionFlags(PLAYER_AVATAR_FLAG_ON_FOOT);
+     return FALSE;
+diff --git a/src/fldeff_misc.c b/src/fldeff_misc.c
+index 1c361fb6f..3b23cabf2 100644
+--- a/src/fldeff_misc.c
++++ b/src/fldeff_misc.c
+@@ -593,8 +593,8 @@ bool8 FldEff_UseSecretPowerCave(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)StartSecretBaseCaveFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartSecretBaseCaveFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartSecretBaseCaveFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartSecretBaseCaveFieldEffect);
+ 
+     return FALSE;
+ }
+@@ -653,8 +653,8 @@ bool8 FldEff_UseSecretPowerTree(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)StartSecretBaseTreeFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartSecretBaseTreeFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartSecretBaseTreeFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartSecretBaseTreeFieldEffect);
+ 
+     return FALSE;
+ }
+@@ -727,8 +727,8 @@ bool8 FldEff_UseSecretPowerShrub(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)StartSecretBaseShrubFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartSecretBaseShrubFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartSecretBaseShrubFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartSecretBaseShrubFieldEffect);
+ 
+     return FALSE;
+ }
+diff --git a/src/fldeff_rocksmash.c b/src/fldeff_rocksmash.c
+index 27689b02e..df8f1c12a 100644
+--- a/src/fldeff_rocksmash.c
++++ b/src/fldeff_rocksmash.c
+@@ -109,7 +109,7 @@ static void Task_DoFieldMove_WaitForMon(u8 taskId)
+ static void Task_DoFieldMove_RunFunc(u8 taskId)
+ {
+     // The function for the field move to do is stored in halves across data[8] and data[9]
+-    void (*fieldMoveFunc)(void) = (void (*)(void))(((u16)gTasks[taskId].data[8] << 16) | (u16)gTasks[taskId].data[9]);
++    void (*fieldMoveFunc)(void) = (void (*)(void))UnpackPtr(((u16)gTasks[taskId].data[8] << 16) | (u16)gTasks[taskId].data[9]);
+ 
+     fieldMoveFunc();
+     gPlayerAvatar.preventStep = FALSE;
+@@ -151,8 +151,8 @@ bool8 FldEff_UseRockSmash(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+ 
+-    gTasks[taskId].data[8] = (u32)FieldMove_RockSmash >> 16;
+-    gTasks[taskId].data[9] = (u32)FieldMove_RockSmash;
++    gTasks[taskId].data[8] = PackPtr(FieldMove_RockSmash) >> 16;
++    gTasks[taskId].data[9] = PackPtr(FieldMove_RockSmash);
+     IncrementGameStat(GAME_STAT_USED_ROCK_SMASH);
+     return FALSE;
+ }
+diff --git a/src/fldeff_strength.c b/src/fldeff_strength.c
+index 931215040..c291a7c5d 100644
+--- a/src/fldeff_strength.c
++++ b/src/fldeff_strength.c
+@@ -36,8 +36,8 @@ static void FieldCallback_Strength(void)
+ bool8 FldEff_UseStrength(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+-    gTasks[taskId].data[8] = (u32)StartStrengthFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartStrengthFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartStrengthFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartStrengthFieldEffect);
+     GetMonNickname(&gPlayerParty[gFieldEffectArguments[0]], gStringVar1);
+     return FALSE;
+ }
+diff --git a/src/fldeff_sweetscent.c b/src/fldeff_sweetscent.c
+index dd979c77a..5737f7eee 100644
+--- a/src/fldeff_sweetscent.c
++++ b/src/fldeff_sweetscent.c
+@@ -42,8 +42,8 @@ bool8 FldEff_SweetScent(void)
+ 
+     SetWeatherScreenFadeOut();
+     taskId = CreateFieldMoveTask();
+-    gTasks[taskId].data[8] = (u32)StartSweetScentFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartSweetScentFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartSweetScentFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartSweetScentFieldEffect);
+     return FALSE;
+ }
+ 
+diff --git a/src/fldeff_teleport.c b/src/fldeff_teleport.c
+index 3f087e5da..0d0935bfb 100644
+--- a/src/fldeff_teleport.c
++++ b/src/fldeff_teleport.c
+@@ -31,8 +31,8 @@ static void FieldCallback_Teleport(void)
+ bool8 FldEff_UseTeleport(void)
+ {
+     u8 taskId = CreateFieldMoveTask();
+-    gTasks[taskId].data[8] = (u32)StartTeleportFieldEffect >> 16;
+-    gTasks[taskId].data[9] = (u32)StartTeleportFieldEffect;
++    gTasks[taskId].data[8] = PackPtr(StartTeleportFieldEffect) >> 16;
++    gTasks[taskId].data[9] = PackPtr(StartTeleportFieldEffect);
+     SetPlayerAvatarTransitionFlags(PLAYER_AVATAR_FLAG_ON_FOOT);
+     return FALSE;
+ }
 diff --git a/src/m4a.c b/src/m4a.c
 index f6499e673..dc474c74a 100644
 --- a/src/m4a.c
@@ -13599,6 +13779,88 @@ index e6f4aaf6a..fe1dd5458 100644
  }
  
  void VDraw(SDL_Texture *texture)
+diff --git a/src/pointer_handle.c b/src/pointer_handle.c
+new file mode 100644
+index 000000000..0c93522d1
+--- /dev/null
++++ b/src/pointer_handle.c
+@@ -0,0 +1,76 @@
++#include "global.h"
++
++// Much of this codebase stores a pointer by splitting it into two 16-bit
++// halves: in the s16 data slots of tasks and sprites, in the link-battle
++// transfer buffer, in the battle factory's follow-up task fields. That is
++// exact while a pointer is 32 bits and silently truncates when it is 64.
++//
++// Widening those slots is not practical -- they are s16 arrays at fixed
++// indices, several hold two pointers in adjacent pairs, and one sits at slot
++// 14 of 16. So instead of storing the pointer, these store a 32-bit *handle*
++// that indexes a side table. A handle splits, masks, byte-swaps and
++// reassembles exactly the way the old 32-bit value did, so every caller's
++// storage layout and arithmetic is untouched.
++//
++// On a 32-bit build both are the identity cast, so the generated code and the
++// stored bytes are exactly what they were before.
++
++#if __SIZEOF_POINTER__ > 4
++
++// Power of two: used as a hash mask. Handles are index + 1, so 0 stays NULL.
++#define PACKED_PTR_CAPACITY 4096
++
++static const void *sPackedPtrs[PACKED_PTR_CAPACITY];
++
++static u32 HashPtr(const void *ptr)
++{
++    uintptr_t v = (uintptr_t)ptr;
++    return (u32)((v >> 4) ^ (v >> 20)) & (PACKED_PTR_CAPACITY - 1);
++}
++
++// Packing the same pointer twice yields the same handle, which keeps the table
++// bounded by the number of *distinct* pointers ever stored. In practice those
++// are function pointers and pointers into fixed globals, so the set is small.
++u32 PackPtr(const void *ptr)
++{
++    u32 i, home;
++
++    if (ptr == NULL)
++        return 0;
++
++    home = HashPtr(ptr);
++    for (i = 0; i < PACKED_PTR_CAPACITY; i++)
++    {
++        u32 probe = (home + i) & (PACKED_PTR_CAPACITY - 1);
++
++        if (sPackedPtrs[probe] == ptr)
++            return probe + 1;
++        if (sPackedPtrs[probe] == NULL)
++        {
++            sPackedPtrs[probe] = ptr;
++            return probe + 1;
++        }
++    }
++    return 0; // table full; unpacking gives NULL rather than a wrong address
++}
++
++void *UnpackPtr(u32 handle)
++{
++    if (handle == 0 || handle > PACKED_PTR_CAPACITY)
++        return NULL;
++    return (void *)sPackedPtrs[handle - 1];
++}
++
++#else
++
++u32 PackPtr(const void *ptr)
++{
++    return (u32)(uintptr_t)ptr;
++}
++
++void *UnpackPtr(u32 handle)
++{
++    return (void *)(uintptr_t)handle;
++}
++
++#endif
 diff --git a/src/pokemon_jump.c b/src/pokemon_jump.c
 index 326512acf..87c669994 100644
 --- a/src/pokemon_jump.c
