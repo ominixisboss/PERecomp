@@ -139,11 +139,11 @@ jobs:
           print('anchor symbol: %s' % mainname)
           syms.sort()
           print('main = 0x%x' % main)
-          print('--- functions within 30KB before main ---')
+          # Every function, not a window around main: a crash in game code is
+          # megabytes from main and would fall outside any window.
+          print('--- all %d functions, as offset from main ---' % len(syms))
           for a, n in syms:
-              d = a - main
-              if -30000 <= d <= 2000:
-                  print('main%+d\t0x%x\t%s' % (d, a, n))
+              print('main%+d\t0x%x\t%s' % (a - main, a, n))
           EOF
 
       - name: Upload unstripped library for symbolizing
