@@ -2799,27 +2799,33 @@ index d6e279a6d..182355579 100644
  
  	.macro keysplit label:req, starting_note
 diff --git a/asm/macros/map.inc b/asm/macros/map.inc
-index 6e91c390c..02ff367d3 100644
+index 6e91c390c..789f27199 100644
 --- a/asm/macros/map.inc
 +++ b/asm/macros/map.inc
-@@ -9,14 +9,14 @@
+@@ -7,16 +7,20 @@
+ 	.endm
+ 
  	/* Defines a map script. 'type' is any MAP_SCRIPT_* constant (see include/constants/map_scripts.h)*/
++	/* ptr_stream, not ptr: MapHeaderGetScriptTable walks these tables byte-wise with a fixed stride.*/
++	/* Their labels live in hand-written scripts.inc files and carry no alignment, so an aligning ptr*/
++	/* would pad by an amount that depends on where the table happens to land.*/
  	.macro map_script type:req, script:req
  	.byte \type
 -	.int \script
-+	ptr \script
++	ptr_stream \script
  	.endm
  
  	/* Defines an entry in a map script table (for either ON_WARP_INTO_MAP_TABLE or ON_FRAME_TABLE)*/
++	/* See map_script above.*/
  	.macro map_script_2 var:req, compare:req, script:req
  	.short \var
  	.short \compare
 -	.int \script
-+	ptr \script
++	ptr_stream \script
  	.endm
  
  	/* Defines an object event template for map data, to be used by a normal object. Mirrors the struct layout of ObjectEventTemplate in include/global.fieldmap.h*/
-@@ -32,7 +32,7 @@
+@@ -32,9 +36,12 @@
  	.space 1  /* Padding*/
  	.short \trainer_type
  	.short \sight_radius_tree_etc
@@ -2827,8 +2833,23 @@ index 6e91c390c..02ff367d3 100644
 +	ptr \script
  	.short \event_flag
  	.space 2  /* Padding*/
++	.ifdef PTR64
++	.space 4  /* Tail padding: with an 8-byte script pointer the struct rounds up to 32 bytes.*/
++	.endif
  	inc _num_npcs
-@@ -72,7 +72,7 @@
+ 	.endm
+ 
+@@ -51,6 +58,9 @@
+ 	.2byte \target_map_id & 0xFF  /* map num*/
+ 	.2byte \target_map_id >> 8    /* map group*/
+ 	.space 8  /* Padding*/
++	.ifdef PTR64
++	.space 8  /* 64-bit ObjectEventTemplate is 32 bytes: 8-byte script field plus tail padding.*/
++	.endif
+ 	inc _num_npcs
+ 	.endm
+ 
+@@ -72,7 +82,7 @@
  	.2byte \var
  	.2byte \varValue
  	.space 2  /* Padding*/
@@ -2837,7 +2858,7 @@ index 6e91c390c..02ff367d3 100644
  	inc _num_traps
  	.endm
  
-@@ -90,10 +90,13 @@
+@@ -90,10 +100,13 @@
  	.byte \kind
  	.space 2  /* Padding*/
  	.if \kind != BG_EVENT_HIDDEN_ITEM
@@ -2852,7 +2873,7 @@ index 6e91c390c..02ff367d3 100644
  	.endif
  	inc _num_signs
  	.endm
-@@ -116,7 +119,10 @@
+@@ -116,7 +129,10 @@
  	/* Defines the table of event data for a map. Mirrors the struct layout of MapEvents in include/global.fieldmap.h*/
  	.macro map_events npcs:req, warps:req, traps:req, signs:req
  	.byte _num_npcs, _num_warps, _num_traps, _num_signs
@@ -6236,11 +6257,31 @@ index f4847abdb..832ee9532 100755
      u8 part1; // 0x18
      u8 tuneValue2; // 0x19
      u8 cont[2]; // 0x1A
+diff --git a/include/global.fieldmap.h b/include/global.fieldmap.h
+index cea8d8c13..f8f8eb854 100755
+--- a/include/global.fieldmap.h
++++ b/include/global.fieldmap.h
+@@ -133,6 +133,15 @@ struct BgEvent
+     } bgUnion;
+ };
+ 
++// The map data for these arrays is hand-laid-out by the macros in
++// asm/macros/map.inc, not emitted by the compiler, so nothing checks that the
++// two agree. They must: an entry one pad short misreads every later entry.
++// These pin the C side; the macros are written to the same sizes.
++_Static_assert(sizeof(struct ObjectEventTemplate) == (__SIZEOF_POINTER__ > 4 ? 32 : 24), "object_event macro size");
++_Static_assert(sizeof(struct WarpEvent) == 8, "warp_def macro size");
++_Static_assert(sizeof(struct CoordEvent) == (__SIZEOF_POINTER__ > 4 ? 24 : 16), "coord_event macro size");
++_Static_assert(sizeof(struct BgEvent) == (__SIZEOF_POINTER__ > 4 ? 16 : 12), "bg_event macro size");
++
+ struct MapEvents
+ {
+     u8 objectEventCount;
 diff --git a/include/global.h b/include/global.h
-index 1653b3a07..0e87e1251 100644
+index 1653b3a07..b86a49e26 100644
 --- a/include/global.h
 +++ b/include/global.h
-@@ -132,6 +132,20 @@ int strcmp(const char *, const char*);
+@@ -132,11 +132,28 @@ int strcmp(const char *, const char*);
  #define T1_READ_32(ptr) ((ptr)[0] | ((ptr)[1] << 8) | ((ptr)[2] << 16) | ((ptr)[3] << 24))
  #define T1_READ_PTR(ptr) (u8 *) T1_READ_32(ptr)
  
@@ -6261,7 +6302,16 @@ index 1653b3a07..0e87e1251 100644
  // T2_READ_8 is a duplicate to remain consistent with each group.
  #define T2_READ_8(ptr)  ((ptr)[0])
  #define T2_READ_16(ptr) ((ptr)[0] + ((ptr)[1] << 8))
-@@ -1105,4 +1119,10 @@ struct MapPosition
+ #define T2_READ_32(ptr) ((ptr)[0] + ((ptr)[1] << 8) + ((ptr)[2] << 16) + ((ptr)[3] << 24))
+-#define T2_READ_PTR(ptr) (void *) T2_READ_32(ptr)
++// Reads a pointer at the target's width, byte-wise, so it works on an
++// unaligned position inside a packed table. T2_READ_32 stays 4 bytes for the
++// places that really do read a 32-bit value.
++#define T2_READ_PTR(ptr) ((void *)ReadStreamPtr((const u8 *)(ptr)))
+ 
+ #define PACK(data, shift, mask)   ( ((data) << (shift)) & (mask) )
+ #define UNPACK(data, shift, mask) ( ((data) & (mask)) >> (shift) )
+@@ -1105,4 +1122,10 @@ struct MapPosition
      s8 elevation;
  };
  
@@ -6359,6 +6409,32 @@ index 9d1ee42c4..2ea471d85 100755
 +void *GetPtrTaskArg(u8 taskId, u8 dataElem);
 +
  #endif // GUARD_TASK_H
+diff --git a/include/util.h b/include/util.h
+index 051f1160b..378d0b43a 100755
+--- a/include/util.h
++++ b/include/util.h
+@@ -9,6 +9,21 @@ extern const u32 gBitTable[];
+ u8 CreateInvisibleSpriteWithCallback(void (*callback)(struct Sprite *));
+ void StoreWordInTwoHalfwords(u16 *h, u32 w);
+ void LoadWordFromTwoHalfwords(u16 *h, u32 *w);
++
++// The pair above carries genuine u32 values at some call sites and pointers at
++// others. A pointer does not survive the round trip on a 64-bit build, so the
++// pointer callers go through a handle instead (see src/pointer_handle.c).
++// These keep those sites one-liners and, on a 32-bit build, generate exactly
++// what the open-coded casts did.
++#define StorePtrInTwoHalfwords(halfwords, ptr) \
++    StoreWordInTwoHalfwords((u16 *)(halfwords), PackPtr(ptr))
++
++#define LoadPtrFromTwoHalfwords(halfwords, ptrVar)                 \
++{                                                                  \
++    u32 packedPtr_;                                                \
++    LoadWordFromTwoHalfwords((u16 *)(halfwords), &packedPtr_);     \
++    (ptrVar) = (__typeof__(ptrVar))UnpackPtr(packedPtr_);          \
++}
+ int CountTrailingZeroBits(u32 value);
+ u16 CalcCRC16(const u8 *data, s32 length);
+ u16 CalcCRC16WithTable(const u8 *data, u32 length);
 diff --git a/include/window.h b/include/window.h
 index 0f2dff2a8..125eedf1b 100644
 --- a/include/window.h
@@ -10115,6 +10191,26 @@ index beef2ccc9..579554723 100644
 +	ptr	se_win_open_1
  
  	.end
+diff --git a/src/agb_flash.c b/src/agb_flash.c
+index 5eb6a70e2..2228e74a0 100644
+--- a/src/agb_flash.c
++++ b/src/agb_flash.c
+@@ -119,12 +119,12 @@ void SetReadFlash1(u16 *dest)
+     u16 *src;
+     u16 i;
+ 
+-    PollFlashStatus = (u8 (*)(u8 *))((s32)dest + 1);
++    PollFlashStatus = (u8 (*)(u8 *))((uintptr_t)dest + 1);
+ 
+     src = (u16 *)ReadFlash1;
+-    src = (u16 *)((s32)src ^ 1);
++    src = (u16 *)((uintptr_t)src ^ 1);
+ 
+-    i = ((s32)SetReadFlash1 - (s32)ReadFlash1) >> 1;
++    i = ((uintptr_t)SetReadFlash1 - (uintptr_t)ReadFlash1) >> 1;
+ 
+     while (i != 0)
+     {
 diff --git a/src/agb_flash_dummy.c b/src/agb_flash_dummy.c
 index cdebc5ed7..f38b007da 100644
 --- a/src/agb_flash_dummy.c
@@ -10183,6 +10279,30 @@ index 422e8a59e..a372e8852 100644
                 0  // appears to be unused
          },
          { 3, 1 }, // wait state setup data
+diff --git a/src/apprentice.c b/src/apprentice.c
+index 1c209be94..55353ccfa 100644
+--- a/src/apprentice.c
++++ b/src/apprentice.c
+@@ -1294,7 +1294,7 @@ static void Task_ExecuteFuncAfterButtonPress(u8 taskId)
+ #ifndef PORTABLE
+         gApprenticeFunc = (void *)(u32)(((u16)gTasks[taskId].data[0] | (gTasks[taskId].data[1] << 16)));
+ #else
+-        gApprenticeFunc = (void *)(u32)(((u16)gTasks[taskId].data[0] | ((u16)gTasks[taskId].data[1] << 16)));
++        gApprenticeFunc = UnpackPtr((u16)gTasks[taskId].data[0] | ((u16)gTasks[taskId].data[1] << 16));
+ #endif
+         gApprenticeFunc();
+         DestroyTask(taskId);
+@@ -1304,8 +1304,8 @@ static void Task_ExecuteFuncAfterButtonPress(u8 taskId)
+ static void ExecuteFuncAfterButtonPress(void (*func)(void))
+ {
+     u8 taskId = CreateTask(Task_ExecuteFuncAfterButtonPress, 1);
+-    gTasks[taskId].data[0] = (u32)(func);
+-    gTasks[taskId].data[1] = (u32)(func) >> 16;
++    gTasks[taskId].data[0] = PackPtr(func);
++    gTasks[taskId].data[1] = PackPtr(func) >> 16;
+ }
+ 
+ static void UNUSED ExecuteFollowupFuncAfterButtonPress(TaskFunc task)
 diff --git a/src/battle_ai_script_commands.c b/src/battle_ai_script_commands.c
 index 6fd3cdad8..456ab3f06 100644
 --- a/src/battle_ai_script_commands.c
@@ -11169,8 +11289,363 @@ index fb2817af9..127900236 100644
  }
  
  static void Cmd_splitbgprio(void)
+diff --git a/src/battle_anim_effects_1.c b/src/battle_anim_effects_1.c
+index c2894894b..f86ddf639 100644
+--- a/src/battle_anim_effects_1.c
++++ b/src/battle_anim_effects_1.c
+@@ -5011,7 +5011,8 @@ void AnimTask_MoonlightEndFade(u8 taskId)
+     gTasks[taskId].data[9] = 15;
+     b = GetBattleMonSpritePalettesMask(1, 1, 1, 1);
+     c = a | b;
+-    StorePointerInVars(&gTasks[taskId].data[14], &gTasks[taskId].data[15], (void *)c);
++    // Not a pointer: a sprite-palette bitmask kept in two halfwords.
++    StoreWordInTwoHalfwords((u16 *)&gTasks[taskId].data[14], c);
+     b = b | (0x10000 << IndexOfSpritePaletteTag(ANIM_TAG_MOON));
+     d = IndexOfSpritePaletteTag(ANIM_TAG_GREEN_SPARKLE);
+     BeginNormalPaletteFade((0x10000 << d) | b, 0, 0, 16, RGB(27, 29, 31));
+@@ -5086,7 +5087,12 @@ static void AnimTask_MoonlightEndFade_Step(u8 taskId)
+     case 2:
+         if (++task->data[1] > 30)
+         {
+-            BeginNormalPaletteFade((u32)LoadPointerFromVars(task->data[14], task->data[15]), 0, 16, 0, RGB(27, 29, 31));
++            {
++                u32 palettes;
++
++                LoadWordFromTwoHalfwords((u16 *)&task->data[14], &palettes);
++                BeginNormalPaletteFade(palettes, 0, 16, 0, RGB(27, 29, 31));
++            }
+             task->data[0]++;
+         }
+         break;
+diff --git a/src/battle_anim_fight.c b/src/battle_anim_fight.c
+index b9cc966ec..af960f523 100644
+--- a/src/battle_anim_fight.c
++++ b/src/battle_anim_fight.c
+@@ -1,4 +1,5 @@
+ #include "global.h"
++#include "util.h"
+ #include "battle_anim.h"
+ #include "gpu_regs.h"
+ #include "random.h"
+@@ -838,7 +839,8 @@ static void AnimSuperpowerRock(struct Sprite *sprite)
+     sprite->y = 120;
+ 
+     sprite->data[0] = gBattleAnimArgs[3];
+-    StorePointerInVars(&sprite->data[4], &sprite->data[5], (void *)(sprite->y << 8));
++    // Not a pointer: a 24.8 fixed-point Y accumulator kept in two halfwords.
++    StoreWordInTwoHalfwords((u16 *)&sprite->data[4], sprite->y << 8);
+ 
+     sprite->data[6] = gBattleAnimArgs[1];
+     sprite->oam.tileNum += gBattleAnimArgs[2] * 4;
+@@ -848,16 +850,15 @@ static void AnimSuperpowerRock(struct Sprite *sprite)
+ 
+ static void AnimSuperpowerRock_Step1(struct Sprite *sprite)
+ {
+-    void *var0;
++    s32 var0;
+ 
+     if (sprite->data[0] != 0)
+     {
+-        var0 = LoadPointerFromVars(sprite->data[4], sprite->data[5]);
++        LoadWordFromTwoHalfwords((u16 *)&sprite->data[4], (u32 *)&var0);
+         var0 -= sprite->data[6];
+-        StorePointerInVars(&sprite->data[4], &sprite->data[5], var0);
++        StoreWordInTwoHalfwords((u16 *)&sprite->data[4], var0);
+ 
+-        var0 = (void *)(((intptr_t)var0) >> 8);
+-        sprite->y = (intptr_t)var0;
++        sprite->y = var0 >> 8;
+         if (sprite->y < -8)
+             DestroyAnimSprite(sprite);
+         else
+diff --git a/src/battle_anim_mons.c b/src/battle_anim_mons.c
+index aed94fbbc..fc86fb594 100644
+--- a/src/battle_anim_mons.c
++++ b/src/battle_anim_mons.c
+@@ -416,8 +416,8 @@ u8 GetAnimBattlerSpriteId(u8 animBattler)
+ 
+ void StoreSpriteCallbackInData6(struct Sprite *sprite, void (*callback)(struct Sprite *))
+ {
+-    sprite->data[6] = (u32)(callback) & 0xffff;
+-    sprite->data[7] = (u32)(callback) >> 16;
++    sprite->data[6] = PackPtr(callback) & 0xffff;
++    sprite->data[7] = PackPtr(callback) >> 16;
+ }
+ 
+ void SetCallbackToStoredInData6(struct Sprite *sprite)
+@@ -427,7 +427,7 @@ void SetCallbackToStoredInData6(struct Sprite *sprite)
+ #else
+     u32 callback = (u16)sprite->data[6] | ((u16)sprite->data[7] << 16);
+ #endif
+-    sprite->callback = (void (*)(struct Sprite *))callback;
++    sprite->callback = (void (*)(struct Sprite *))UnpackPtr(callback);
+ }
+ 
+ // Sprite data for TranslateSpriteInCircle/Ellipse and related
+@@ -1948,15 +1948,19 @@ static u16 GetBattlerYDeltaFromSpriteId(u8 spriteId)
+     return MON_PIC_HEIGHT;
+ }
+ 
++// The two s16 slots hold a handle, not the pointer itself -- see
++// src/pointer_handle.c. Identical stored bytes on a 32-bit build.
+ void StorePointerInVars(s16 *lo, s16 *hi, const void *ptr)
+ {
+-    *lo = ((intptr_t) ptr) & 0xffff;
+-    *hi = (((intptr_t) ptr) >> 16) & 0xffff;
++    u32 handle = PackPtr(ptr);
++
++    *lo = handle & 0xffff;
++    *hi = (handle >> 16) & 0xffff;
+ }
+ 
+ void *LoadPointerFromVars(s16 lo, s16 hi)
+ {
+-    return (void *)((u16)lo | ((u16)hi << 16));
++    return UnpackPtr((u16)lo | ((u16)hi << 16));
+ }
+ 
+ void PrepareEruptAnimTaskData(struct Task *task, u8 spriteId, s16 xScaleStart, s16 yScaleStart, s16 xScaleEnd, s16 yScaleEnd, u16 duration)
+diff --git a/src/battle_controller_player.c b/src/battle_controller_player.c
+index 4b564ad14..6229ac330 100644
+--- a/src/battle_controller_player.c
++++ b/src/battle_controller_player.c
+@@ -2797,7 +2797,7 @@ static void PlayerHandleDMA3Transfer(void)
+     u16 sizeArg = gBattleBufferA[gActiveBattler][5] | (gBattleBufferA[gActiveBattler][6] << 8);
+ 
+     const u8 *src = &gBattleBufferA[gActiveBattler][7];
+-    u8 *dst = (u8 *)(dstArg);
++    u8 *dst = UnpackPtr(dstArg);
+     u32 size = sizeArg;
+ 
+     while (1)
+diff --git a/src/battle_controllers.c b/src/battle_controllers.c
+index 602a289b6..0c7235017 100644
+--- a/src/battle_controllers.c
++++ b/src/battle_controllers.c
+@@ -1323,12 +1323,16 @@ void BtlController_EmitDataTransfer(u8 bufferId, u16 size, void *data)
+ static void UNUSED BtlController_EmitDMA3Transfer(u8 bufferId, void *dst, u16 size, void *data)
+ {
+     s32 i;
++    u32 dstHandle;
+ 
+     sBattleBuffersTransferData[0] = CONTROLLER_DMA3TRANSFER;
+-    sBattleBuffersTransferData[1] = (u32)(dst);
+-    sBattleBuffersTransferData[2] = ((u32)(dst) & 0x0000FF00) >> 8;
+-    sBattleBuffersTransferData[3] = ((u32)(dst) & 0x00FF0000) >> 16;
+-    sBattleBuffersTransferData[4] = ((u32)(dst) & 0xFF000000) >> 24;
++    // The four bytes carry a handle rather than the address itself, so the
++    // receiver's reassembly still yields the right pointer through UnpackPtr.
++    dstHandle = PackPtr(dst);
++    sBattleBuffersTransferData[1] = dstHandle;
++    sBattleBuffersTransferData[2] = (dstHandle & 0x0000FF00) >> 8;
++    sBattleBuffersTransferData[3] = (dstHandle & 0x00FF0000) >> 16;
++    sBattleBuffersTransferData[4] = (dstHandle & 0xFF000000) >> 24;
+     sBattleBuffersTransferData[5] = size;
+     sBattleBuffersTransferData[6] = (size & 0xFF00) >> 8;
+     for (i = 0; i < size; i++)
+diff --git a/src/battle_factory_screen.c b/src/battle_factory_screen.c
+index fec2f1391..b40bc1dd2 100644
+--- a/src/battle_factory_screen.c
++++ b/src/battle_factory_screen.c
+@@ -2485,11 +2485,7 @@ static void Swap_Task_HandleYesNo(u8 taskId)
+                 gTasks[taskId].tSaidYes = TRUE;
+                 hiPtr = gTasks[taskId].tFollowUpTaskPtrHi;
+                 loPtr = gTasks[taskId].tFollowUpTaskPtrLo;
+-#ifndef PORTABLE
+-                gTasks[taskId].func = (void *)((hiPtr << 16) | loPtr);
+-#else
+-                gTasks[taskId].func = (void *)(((u16)hiPtr << 16 | (u16)loPtr));
+-#endif
++                gTasks[taskId].func = (TaskFunc)UnpackPtr(((u16)hiPtr << 16) | (u16)loPtr);
+             }
+             else
+             {
+@@ -2498,11 +2494,7 @@ static void Swap_Task_HandleYesNo(u8 taskId)
+                 Swap_ErasePopupMenu(SWAP_WIN_YES_NO);
+                 hiPtr = gTasks[taskId].tFollowUpTaskPtrHi;
+                 loPtr = gTasks[taskId].tFollowUpTaskPtrLo;
+-#ifndef PORTABLE
+-                gTasks[taskId].func = (void *)((hiPtr << 16) | loPtr);
+-#else
+-                gTasks[taskId].func = (void *)(((u16)hiPtr << 16 | (u16)loPtr));
+-#endif
++                gTasks[taskId].func = (TaskFunc)UnpackPtr(((u16)hiPtr << 16) | (u16)loPtr);
+             }
+         }
+         else if (JOY_NEW(B_BUTTON))
+@@ -2512,11 +2504,7 @@ static void Swap_Task_HandleYesNo(u8 taskId)
+             Swap_ErasePopupMenu(SWAP_WIN_YES_NO);
+             hiPtr = gTasks[taskId].tFollowUpTaskPtrHi;
+             loPtr = gTasks[taskId].tFollowUpTaskPtrLo;
+-#ifndef PORTABLE
+-            gTasks[taskId].func = (void *)((hiPtr << 16) | loPtr);
+-#else
+-            gTasks[taskId].func = (void *)(((u16)hiPtr << 16 | (u16)loPtr));
+-#endif
++            gTasks[taskId].func = (TaskFunc)UnpackPtr(((u16)hiPtr << 16) | (u16)loPtr);
+         }
+         else if (JOY_REPEAT(DPAD_UP))
+         {
+@@ -2542,8 +2530,8 @@ static void Swap_HandleQuitSwappingResponse(u8 taskId)
+     else
+     {
+         gTasks[taskId].tState = 0;
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_HandleChooseMons) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_HandleChooseMons);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_HandleChooseMons) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_HandleChooseMons);
+         gTasks[taskId].tFollowUpTaskState = STATE_CHOOSE_MONS_HANDLE_INPUT;
+         gTasks[taskId].func = Swap_Task_ScreenInfoTransitionIn;
+     }
+@@ -2556,8 +2544,8 @@ static void Swap_AskQuitSwapping(u8 taskId)
+         Swap_PrintOnInfoWindow(gText_QuitSwapping);
+         sFactorySwapScreen->monSwapped = FALSE;
+         gTasks[taskId].tState = STATE_YESNO_SHOW;
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_HandleQuitSwappingResponse) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_HandleQuitSwappingResponse);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_HandleQuitSwappingResponse) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_HandleQuitSwappingResponse);
+         gTasks[taskId].func = Swap_Task_HandleYesNo;
+     }
+ }
+@@ -2573,8 +2561,8 @@ static void Swap_HandleAcceptMonResponse(u8 taskId)
+     else
+     {
+         gTasks[taskId].tState = 0;
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_HandleChooseMons) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_HandleChooseMons);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_HandleChooseMons) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_HandleChooseMons);
+         gTasks[taskId].tFollowUpTaskState = STATE_CHOOSE_MONS_HANDLE_INPUT;
+         gTasks[taskId].func = Swap_Task_ScreenInfoTransitionIn;
+     }
+@@ -2588,8 +2576,8 @@ static void Swap_AskAcceptMon(u8 taskId)
+         Swap_PrintOnInfoWindow(gText_AcceptThisPkmn);
+         sFactorySwapScreen->monSwapped = TRUE;
+         gTasks[taskId].tState = STATE_YESNO_SHOW;
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_HandleAcceptMonResponse) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_HandleAcceptMonResponse);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_HandleAcceptMonResponse) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_HandleAcceptMonResponse);
+         gTasks[taskId].func = Swap_Task_HandleYesNo;
+     }
+ }
+@@ -2624,8 +2612,8 @@ static void Swap_Task_HandleMenu(u8 taskId)
+                 CloseMonPic(sFactorySwapScreen->monPic, &sFactorySwapScreen->monPicAnimating, TRUE);
+                 Swap_ErasePopupMenu(SWAP_WIN_OPTIONS);
+                 gTasks[taskId].tState = 0;
+-                gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_HandleChooseMons) >> 16;
+-                gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_HandleChooseMons);
++                gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_HandleChooseMons) >> 16;
++                gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_HandleChooseMons);
+                 gTasks[taskId].tFollowUpTaskState = STATE_CHOOSE_MONS_HANDLE_INPUT;
+                 gTasks[taskId].func = Swap_Task_ScreenInfoTransitionIn;
+             }
+@@ -2671,8 +2659,8 @@ static void Swap_Task_HandleChooseMons(u8 taskId)
+             sFactorySwapScreen->fadeSpeciesNameActive = FALSE;
+             Swap_PrintMonSpeciesAtFade();
+             Swap_EraseSpeciesWindow();
+-            gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_AskQuitSwapping) >> 16;
+-            gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_AskQuitSwapping);
++            gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_AskQuitSwapping) >> 16;
++            gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_AskQuitSwapping);
+             gTasks[taskId].tState = 0;
+             gTasks[taskId].tFollowUpTaskState = 0;
+             gTasks[taskId].func = Swap_Task_ScreenInfoTransitionOut;
+@@ -3086,11 +3074,7 @@ static void Swap_Task_ScreenInfoTransitionOut(u8 taskId)
+             gTasks[taskId].tState = gTasks[taskId].tFollowUpTaskState;
+             hiPtr = gTasks[taskId].tFollowUpTaskPtrHi;
+             loPtr = gTasks[taskId].tFollowUpTaskPtrLo;
+-#ifndef PORTABLE
+-            gTasks[taskId].func = (void*)((hiPtr << 16) | loPtr);
+-#else
+-            gTasks[taskId].func = (void*)(((u16)hiPtr << 16 | (u16)loPtr));
+-#endif
++            gTasks[taskId].func = (TaskFunc)UnpackPtr(((u16)hiPtr << 16) | (u16)loPtr);
+         }
+         break;
+     }
+@@ -3197,11 +3181,7 @@ static void Swap_Task_ScreenInfoTransitionIn(u8 taskId)
+         gTasks[taskId].tState = gTasks[taskId].tFollowUpTaskState;
+         hiPtr = gTasks[taskId].tFollowUpTaskPtrHi;
+         loPtr = gTasks[taskId].tFollowUpTaskPtrLo;
+-#ifndef PORTABLE
+-        gTasks[taskId].func = (void*)((hiPtr << 16) | loPtr);
+-#else
+-        gTasks[taskId].func = (void*)(((u16)hiPtr << 16 | (u16)loPtr));
+-#endif
++        gTasks[taskId].func = (TaskFunc)UnpackPtr(((u16)hiPtr << 16) | (u16)loPtr);
+         break;
+     }
+ }
+@@ -3263,8 +3243,8 @@ static void Swap_Task_SwitchPartyScreen(u8 taskId)
+         break;
+     case 4:
+         gTasks[taskId].tState = 0;
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_HandleChooseMons) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_HandleChooseMons);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_HandleChooseMons) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_HandleChooseMons);
+         gTasks[taskId].tFollowUpTaskState = STATE_CHOOSE_MONS_HANDLE_INPUT;
+         gTasks[taskId].func = Swap_Task_ScreenInfoTransitionIn;
+         break;
+@@ -4026,8 +4006,8 @@ static void Swap_OptionRechoose(u8 taskId)
+     CloseMonPic(sFactorySwapScreen->monPic, &sFactorySwapScreen->monPicAnimating, TRUE);
+     Swap_ErasePopupMenu(SWAP_WIN_OPTIONS);
+     gTasks[taskId].tState = 0;
+-    gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_HandleChooseMons) >> 16;
+-    gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_HandleChooseMons);
++    gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_HandleChooseMons) >> 16;
++    gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_HandleChooseMons);
+     gTasks[taskId].tFollowUpTaskState = STATE_CHOOSE_MONS_HANDLE_INPUT;
+     gTasks[taskId].func = Swap_Task_ScreenInfoTransitionIn;
+ }
+@@ -4040,8 +4020,8 @@ static void Swap_RunActionFunc(u8 taskId)
+ 
+ static void Swap_ActionCancel(u8 taskId)
+ {
+-    gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_AskQuitSwapping) >> 16;
+-    gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_AskQuitSwapping);
++    gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_AskQuitSwapping) >> 16;
++    gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_AskQuitSwapping);
+     gTasks[taskId].tState = 0;
+     gTasks[taskId].tFollowUpTaskState = 0;
+     gTasks[taskId].func = Swap_Task_ScreenInfoTransitionOut;
+@@ -4049,8 +4029,8 @@ static void Swap_ActionCancel(u8 taskId)
+ 
+ static void Swap_ActionPkmnForSwap(u8 taskId)
+ {
+-    gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_SwitchPartyScreen) >> 16;
+-    gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_SwitchPartyScreen);
++    gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_SwitchPartyScreen) >> 16;
++    gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_SwitchPartyScreen);
+     gTasks[taskId].tFollowUpTaskState = 0;
+     gTasks[taskId].tState = 0;
+     gTasks[taskId].func = Swap_Task_ScreenInfoTransitionOut;
+@@ -4060,8 +4040,8 @@ static void Swap_ActionMon(u8 taskId)
+ {
+     if (!sFactorySwapScreen->inEnemyScreen)
+     {
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_Task_HandleMenu) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_Task_HandleMenu);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_Task_HandleMenu) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_Task_HandleMenu);
+         gTasks[taskId].tFollowUpTaskState = STATE_MENU_INIT;
+     }
+     else if (Swap_AlreadyHasSameSpecies(sFactorySwapScreen->cursorPos) == TRUE)
+@@ -4074,8 +4054,8 @@ static void Swap_ActionMon(u8 taskId)
+     }
+     else
+     {
+-        gTasks[taskId].tFollowUpTaskPtrHi = (u32)(Swap_AskAcceptMon) >> 16;
+-        gTasks[taskId].tFollowUpTaskPtrLo = (u32)(Swap_AskAcceptMon);
++        gTasks[taskId].tFollowUpTaskPtrHi = PackPtr(Swap_AskAcceptMon) >> 16;
++        gTasks[taskId].tFollowUpTaskPtrLo = PackPtr(Swap_AskAcceptMon);
+         gTasks[taskId].tFollowUpTaskState = 0;
+     }
+     gTasks[taskId].tState = 0;
 diff --git a/src/battle_script_commands.c b/src/battle_script_commands.c
-index d4fae17ea..f3e6f40e3 100644
+index d4fae17ea..77e1c278d 100644
 --- a/src/battle_script_commands.c
 +++ b/src/battle_script_commands.c
 @@ -1013,7 +1013,7 @@ static void JumpIfMoveFailed(u8 adder, u16 move)
@@ -11526,9 +12001,10 @@ index d4fae17ea..f3e6f40e3 100644
  {
      u8 caseID = gBattlescriptCurrInstr[1];
 -    const u8 *memByte = T2_READ_PTR(gBattlescriptCurrInstr + 2);
-+    const u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 2);
-     u8 value = gBattlescriptCurrInstr[6];
+-    u8 value = gBattlescriptCurrInstr[6];
 -    const u8 *jumpPtr = T2_READ_PTR(gBattlescriptCurrInstr + 7);
++    const u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 2);
++    u8 value = gBattlescriptCurrInstr[2 + sizeof(void *)];
 +    const u8 *jumpPtr = ReadStreamPtr(gBattlescriptCurrInstr + 3 + sizeof(void *));
  
 -    gBattlescriptCurrInstr += 11;
@@ -11574,10 +12050,11 @@ index d4fae17ea..f3e6f40e3 100644
  {
 -    const u8 *mem1 = T2_READ_PTR(gBattlescriptCurrInstr + 1);
 -    const u8 *mem2 = T2_READ_PTR(gBattlescriptCurrInstr + 5);
+-    u32 size = gBattlescriptCurrInstr[9];
+-    const u8 *jumpPtr = T2_READ_PTR(gBattlescriptCurrInstr + 10);
 +    const u8 *mem1 = ReadStreamPtr(gBattlescriptCurrInstr + 1);
 +    const u8 *mem2 = ReadStreamPtr(gBattlescriptCurrInstr + 1 + sizeof(void *));
-     u32 size = gBattlescriptCurrInstr[9];
--    const u8 *jumpPtr = T2_READ_PTR(gBattlescriptCurrInstr + 10);
++    u32 size = gBattlescriptCurrInstr[1 + 2 * sizeof(void *)];
 +    const u8 *jumpPtr = ReadStreamPtr(gBattlescriptCurrInstr + 2 + 2 * sizeof(void *));
  
      u8 i;
@@ -11596,10 +12073,11 @@ index d4fae17ea..f3e6f40e3 100644
      u8 equalBytes = 0;
 -    const u8 *mem1 = T2_READ_PTR(gBattlescriptCurrInstr + 1);
 -    const u8 *mem2 = T2_READ_PTR(gBattlescriptCurrInstr + 5);
+-    u32 size = gBattlescriptCurrInstr[9];
+-    const u8 *jumpPtr = T2_READ_PTR(gBattlescriptCurrInstr + 10);
 +    const u8 *mem1 = ReadStreamPtr(gBattlescriptCurrInstr + 1);
 +    const u8 *mem2 = ReadStreamPtr(gBattlescriptCurrInstr + 1 + sizeof(void *));
-     u32 size = gBattlescriptCurrInstr[9];
--    const u8 *jumpPtr = T2_READ_PTR(gBattlescriptCurrInstr + 10);
++    u32 size = gBattlescriptCurrInstr[1 + 2 * sizeof(void *)];
 +    const u8 *jumpPtr = ReadStreamPtr(gBattlescriptCurrInstr + 2 + 2 * sizeof(void *));
  
      u8 i;
@@ -11615,8 +12093,9 @@ index d4fae17ea..f3e6f40e3 100644
  static void Cmd_setbyte(void)
  {
 -    u8 *memByte = T2_READ_PTR(gBattlescriptCurrInstr + 1);
+-    *memByte = gBattlescriptCurrInstr[5];
 +    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
-     *memByte = gBattlescriptCurrInstr[5];
++    *memByte = gBattlescriptCurrInstr[1 + sizeof(void *)];
  
 -    gBattlescriptCurrInstr += 6;
 +    gBattlescriptCurrInstr += 2 + sizeof(void *);
@@ -11625,18 +12104,20 @@ index d4fae17ea..f3e6f40e3 100644
  static void Cmd_addbyte(void)
  {
 -    u8 *memByte = T2_READ_PTR(gBattlescriptCurrInstr + 1);
-+    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
-     *memByte += gBattlescriptCurrInstr[5];
+-    *memByte += gBattlescriptCurrInstr[5];
 -    gBattlescriptCurrInstr += 6;
++    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
++    *memByte += gBattlescriptCurrInstr[1 + sizeof(void *)];
 +    gBattlescriptCurrInstr += 2 + sizeof(void *);
  }
  
  static void Cmd_subbyte(void)
  {
 -    u8 *memByte = T2_READ_PTR(gBattlescriptCurrInstr + 1);
-+    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
-     *memByte -= gBattlescriptCurrInstr[5];
+-    *memByte -= gBattlescriptCurrInstr[5];
 -    gBattlescriptCurrInstr += 6;
++    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
++    *memByte -= gBattlescriptCurrInstr[1 + sizeof(void *)];
 +    gBattlescriptCurrInstr += 2 + sizeof(void *);
  }
  
@@ -11644,9 +12125,10 @@ index d4fae17ea..f3e6f40e3 100644
  {
 -    u8 *dest = T2_READ_PTR(gBattlescriptCurrInstr + 1);
 -    const u8 *src = T2_READ_PTR(gBattlescriptCurrInstr + 5);
+-    s32 size = gBattlescriptCurrInstr[9];
 +    u8 *dest = ReadStreamPtr(gBattlescriptCurrInstr + 1);
 +    const u8 *src = ReadStreamPtr(gBattlescriptCurrInstr + 1 + sizeof(void *));
-     s32 size = gBattlescriptCurrInstr[9];
++    s32 size = gBattlescriptCurrInstr[1 + 2 * sizeof(void *)];
  
      s32 i;
      for (i = 0; i < size; i++)
@@ -11661,10 +12143,11 @@ index d4fae17ea..f3e6f40e3 100644
 -    u8 *dest = T2_READ_PTR(gBattlescriptCurrInstr + 1);
 -    const u8 *src = T2_READ_PTR(gBattlescriptCurrInstr + 5);
 -    const u8 *index = T2_READ_PTR(gBattlescriptCurrInstr + 9);
+-    s32 size = gBattlescriptCurrInstr[13];
 +    u8 *dest = ReadStreamPtr(gBattlescriptCurrInstr + 1);
 +    const u8 *src = ReadStreamPtr(gBattlescriptCurrInstr + 1 + sizeof(void *));
 +    const u8 *index = ReadStreamPtr(gBattlescriptCurrInstr + 1 + 2 * sizeof(void *));
-     s32 size = gBattlescriptCurrInstr[13];
++    s32 size = gBattlescriptCurrInstr[1 + 3 * sizeof(void *)];
  
      s32 i;
      for (i = 0; i < size; i++)
@@ -11677,9 +12160,10 @@ index d4fae17ea..f3e6f40e3 100644
  static void Cmd_orbyte(void)
  {
 -    u8 *memByte = T2_READ_PTR(gBattlescriptCurrInstr + 1);
-+    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
-     *memByte |= gBattlescriptCurrInstr[5];
+-    *memByte |= gBattlescriptCurrInstr[5];
 -    gBattlescriptCurrInstr += 6;
++    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
++    *memByte |= gBattlescriptCurrInstr[1 + sizeof(void *)];
 +    gBattlescriptCurrInstr += 2 + sizeof(void *);
  }
  
@@ -11710,9 +12194,10 @@ index d4fae17ea..f3e6f40e3 100644
  static void Cmd_bicbyte(void)
  {
 -    u8 *memByte = T2_READ_PTR(gBattlescriptCurrInstr + 1);
-+    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
-     *memByte &= ~(gBattlescriptCurrInstr[5]);
+-    *memByte &= ~(gBattlescriptCurrInstr[5]);
 -    gBattlescriptCurrInstr += 6;
++    u8 *memByte = ReadStreamPtr(gBattlescriptCurrInstr + 1);
++    *memByte &= ~(gBattlescriptCurrInstr[1 + sizeof(void *)]);
 +    gBattlescriptCurrInstr += 2 + sizeof(void *);
  }
  
@@ -11979,7 +12464,7 @@ index d4fae17ea..f3e6f40e3 100644
  
              if (GetBattlerPosition(gActiveBattler) == B_POSITION_PLAYER_LEFT && gBattleResults.playerSwitchesCounter < 255)
                  gBattleResults.playerSwitchesCounter++;
-@@ -5374,8 +5374,8 @@ static void Cmd_returntoball(void)
+@@ -5374,10 +5374,10 @@ static void Cmd_returntoball(void)
  
  static void Cmd_handlelearnnewmove(void)
  {
@@ -11988,8 +12473,11 @@ index d4fae17ea..f3e6f40e3 100644
 +    const u8 *learnedMovePtr = ReadStreamPtr(gBattlescriptCurrInstr + 1);
 +    const u8 *nothingToLearnPtr = ReadStreamPtr(gBattlescriptCurrInstr + 1 + sizeof(void *));
  
-     u16 learnMove = MonTryLearningNewMove(&gPlayerParty[gBattleStruct->expGetterMonId], gBattlescriptCurrInstr[9]);
+-    u16 learnMove = MonTryLearningNewMove(&gPlayerParty[gBattleStruct->expGetterMonId], gBattlescriptCurrInstr[9]);
++    u16 learnMove = MonTryLearningNewMove(&gPlayerParty[gBattleStruct->expGetterMonId], gBattlescriptCurrInstr[1 + 2 * sizeof(void *)]);
      while (learnMove == MON_ALREADY_KNOWS_MOVE)
+         learnMove = MonTryLearningNewMove(&gPlayerParty[gBattleStruct->expGetterMonId], FALSE);
+ 
 @@ -5387,7 +5387,7 @@ static void Cmd_handlelearnnewmove(void)
      }
      else if (learnMove == MON_HAS_MAX_MOVES)
@@ -12037,6 +12525,18 @@ index d4fae17ea..f3e6f40e3 100644
              HandleBattleWindow(YESNOBOX_X_Y, WINDOW_CLEAR);
          }
          break;
+@@ -6121,9 +6121,9 @@ static void DrawLevelUpBannerText(void)
+     *(txtPtr)++ = CHAR_EXTRA_SYMBOL;
+     *(txtPtr)++ = CHAR_LV_2;
+ 
+-    var = (u32)(txtPtr);
++    var = (u32)(uintptr_t)(txtPtr);
+     txtPtr = ConvertIntToDecimalStringN(txtPtr, monLevel, STR_CONV_MODE_LEFT_ALIGN, 3);
+-    var = (u32)(txtPtr) - var;
++    var = (u32)(uintptr_t)(txtPtr) - var;
+     txtPtr = StringFill(txtPtr, CHAR_SPACER, 4 - var);
+ 
+     if (monGender != MON_GENDERLESS)
 @@ -6270,9 +6270,9 @@ static void Cmd_buffermovetolearn(void)
  static void Cmd_jumpifplayerran(void)
  {
@@ -12058,7 +12558,7 @@ index d4fae17ea..f3e6f40e3 100644
  
      if (gBattleTypeFlags & BATTLE_TYPE_DOUBLE)
      {
-@@ -6622,19 +6622,19 @@ static void Cmd_jumpifnexttargetvalid(void)
+@@ -6622,21 +6622,21 @@ static void Cmd_jumpifnexttargetvalid(void)
          }
  
          if (gBattlerTarget >= gBattlersCount)
@@ -12079,8 +12579,11 @@ index d4fae17ea..f3e6f40e3 100644
 -    const u8 *failPtr = T1_READ_PTR(gBattlescriptCurrInstr + 1);
 +    const u8 *failPtr = ReadStreamPtr(gBattlescriptCurrInstr + 1);
  
-     if (gBattlescriptCurrInstr[5] == BS_ATTACKER)
+-    if (gBattlescriptCurrInstr[5] == BS_ATTACKER)
++    if (gBattlescriptCurrInstr[1 + sizeof(void *)] == BS_ATTACKER)
          gBattlerTarget = gBattlerAttacker;
+ 
+     gBattleMoveDamage = gBattleMons[gBattlerTarget].maxHP / 2;
 @@ -6647,7 +6647,7 @@ static void Cmd_tryhealhalfhealth(void)
      if (gBattleMons[gBattlerTarget].hp == gBattleMons[gBattlerTarget].maxHP)
          gBattlescriptCurrInstr = failPtr;
@@ -13063,7 +13566,7 @@ index 7ac88091e..3b8c51c01 100644
      return FALSE;
  }
 diff --git a/src/contest_ai.c b/src/contest_ai.c
-index 443e57f8b..3c8839713 100644
+index 443e57f8b..8e7edd46d 100644
 --- a/src/contest_ai.c
 +++ b/src/contest_ai.c
 @@ -417,9 +417,9 @@ static void ContestAICmd_if_appeal_num_less_than(void)
@@ -14184,8 +14687,9 @@ index 443e57f8b..3c8839713 100644
  
  static void ContestAICmd_call(void)
  {
-     AIStackPushVar(gAIScriptPtr + 5);
+-    AIStackPushVar(gAIScriptPtr + 5);
 -    gAIScriptPtr = T1_READ_PTR(gAIScriptPtr + 1);
++    AIStackPushVar(gAIScriptPtr + 1 + sizeof(void *)); // return past the opcode and its pointer operand
 +    gAIScriptPtr = ReadStreamPtr(gAIScriptPtr + 1);
  }
  
@@ -14236,6 +14740,19 @@ index 443e57f8b..3c8839713 100644
 -        gAIScriptPtr += 4;
 +        gAIScriptPtr += 0 + sizeof(void *);
  }
+diff --git a/src/dynamic_placeholder_text_util.c b/src/dynamic_placeholder_text_util.c
+index 1ec0c1e06..1e1ecd4fd 100644
+--- a/src/dynamic_placeholder_text_util.c
++++ b/src/dynamic_placeholder_text_util.c
+@@ -17,7 +17,7 @@ void DynamicPlaceholderTextUtil_Reset(void)
+     do
+     {
+         *ptr2-- = fillval;
+-    } while ((int)ptr2 >= (int)ptr);
++    } while (ptr2 >= ptr);
+ }
+ 
+ void DynamicPlaceholderTextUtil_SetPlaceholderPtr(u8 idx, const u8 *ptr)
 diff --git a/src/easy_chat.c b/src/easy_chat.c
 index 5fdf762b8..e7c754a30 100644
 --- a/src/easy_chat.c
@@ -14286,8 +14803,87 @@ index 5fdf762b8..e7c754a30 100644
          }
          break;
      case 4:
+diff --git a/src/event_object_movement.c b/src/event_object_movement.c
+index 6997f0b40..c5facbfb3 100644
+--- a/src/event_object_movement.c
++++ b/src/event_object_movement.c
+@@ -8899,7 +8899,7 @@ static void CreateLevitateMovementTask(struct ObjectEvent *objectEvent)
+     u8 taskId = CreateTask(ApplyLevitateMovement, 0xFF);
+     struct Task *task = &gTasks[taskId];
+ 
+-    StoreWordInTwoHalfwords(&task->data[0], (u32)objectEvent);
++    StorePtrInTwoHalfwords(&task->data[0], objectEvent);
+     objectEvent->warpArrowSpriteId = taskId;
+     task->data[3] = 0xFFFF;
+ }
+@@ -8910,7 +8910,7 @@ static void ApplyLevitateMovement(u8 taskId)
+     struct Sprite *sprite;
+     struct Task *task = &gTasks[taskId];
+ 
+-    LoadWordFromTwoHalfwords(&task->data[0], (u32 *)&objectEvent); // load the map object pointer.
++    LoadPtrFromTwoHalfwords(&task->data[0], objectEvent); // load the map object pointer.
+     sprite = &gSprites[objectEvent->spriteId];
+ 
+     if(!(task->data[2] & 3))
+@@ -8927,7 +8927,7 @@ static void DestroyLevitateMovementTask(u8 taskId)
+     struct ObjectEvent *objectEvent;
+     struct Task *task = &gTasks[taskId];
+ 
+-    LoadWordFromTwoHalfwords(&task->data[0], (u32 *)&objectEvent); // unused objectEvent
++    LoadPtrFromTwoHalfwords(&task->data[0], objectEvent); // unused objectEvent
+     DestroyTask(taskId);
+ }
+ 
+diff --git a/src/field_control_avatar.c b/src/field_control_avatar.c
+index 8ddeda77a..28705cb0d 100644
+--- a/src/field_control_avatar.c
++++ b/src/field_control_avatar.c
+@@ -346,8 +346,10 @@ static const u8 *GetInteractedBackgroundEventScript(struct MapPosition *position
+     case 5:
+     case 6:
+     case BG_EVENT_HIDDEN_ITEM:
+-        gSpecialVar_0x8004 = ((u32)bgEvent->bgUnion.script >> 16) + FLAG_HIDDEN_ITEMS_START;
+-        gSpecialVar_0x8005 = (u32)bgEvent->bgUnion.script;
++        // Not an address: a hidden-item bg event packs the flag and item
++        // number into this union member.
++        gSpecialVar_0x8004 = ((u32)(uintptr_t)bgEvent->bgUnion.script >> 16) + FLAG_HIDDEN_ITEMS_START;
++        gSpecialVar_0x8005 = (u32)(uintptr_t)bgEvent->bgUnion.script;
+         if (FlagGet(gSpecialVar_0x8004) == TRUE)
+             return NULL;
+         return EventScript_HiddenItemScript;
+diff --git a/src/field_door.c b/src/field_door.c
+index 9d69337c0..e26e9ec9b 100644
+--- a/src/field_door.c
++++ b/src/field_door.c
+@@ -409,8 +409,8 @@ static bool32 AnimateDoorFrame(struct DoorGraphics *gfx, struct DoorAnimFrame *f
+ static void Task_AnimateDoor(u8 taskId)
+ {
+     u16 *data = (u16*) gTasks[taskId].data;
+-    struct DoorAnimFrame *frames = (struct DoorAnimFrame *)(tFramesHi << 16 | tFramesLo);
+-    struct DoorGraphics *gfx = (struct DoorGraphics *)(tGfxHi << 16 | tGfxLo);
++    struct DoorAnimFrame *frames = UnpackPtr(((u16)tFramesHi << 16) | (u16)tFramesLo);
++    struct DoorGraphics *gfx = UnpackPtr(((u16)tGfxHi << 16) | (u16)tGfxLo);
+ 
+     if (AnimateDoorFrame(gfx, frames, data) == FALSE)
+         DestroyTask(taskId);
+@@ -448,11 +448,11 @@ static s8 StartDoorAnimationTask(const struct DoorGraphics *gfx, const struct Do
+         tX = x;
+         tY = y;
+ 
+-        tFramesLo = (u32)frames;
+-        tFramesHi = (u32)frames >> 16;
++        tFramesLo = PackPtr(frames);
++        tFramesHi = PackPtr(frames) >> 16;
+ 
+-        tGfxLo = (u32)gfx;
+-        tGfxHi = (u32)gfx >> 16;
++        tGfxLo = PackPtr(gfx);
++        tGfxHi = PackPtr(gfx) >> 16;
+ 
+         return taskId;
+     }
 diff --git a/src/field_effect.c b/src/field_effect.c
-index 5dcc4b3c0..c79a5f392 100644
+index 5dcc4b3c0..ab22e78bb 100644
 --- a/src/field_effect.c
 +++ b/src/field_effect.c
 @@ -762,6 +762,19 @@ bool8 FieldEffectCmd_loadfadedpal_callnative(u8 **script, u32 *val)
@@ -14351,6 +14947,60 @@ index 5dcc4b3c0..c79a5f392 100644
  }
  
  void FieldEffectFreeGraphicsResources(struct Sprite *sprite)
+@@ -2614,7 +2627,7 @@ static void FieldMoveShowMonOutdoorsEffect_Init(struct Task *task)
+ {
+     task->data[11] = REG_WININ;
+     task->data[12] = REG_WINOUT;
+-    StoreWordInTwoHalfwords((u16*) &task->data[13], (u32)gMain.vblankCallback);
++    StorePtrInTwoHalfwords(&task->data[13], gMain.vblankCallback);
+     task->tWinHoriz = WIN_RANGE(DISPLAY_WIDTH, DISPLAY_WIDTH + 1);
+     task->tWinVert = WIN_RANGE(DISPLAY_HEIGHT / 2, DISPLAY_HEIGHT / 2 + 1);
+     task->tWinIn = WININ_WIN0_BG_ALL | WININ_WIN0_OBJ | WININ_WIN0_CLR;
+@@ -2713,7 +2726,7 @@ static void FieldMoveShowMonOutdoorsEffect_RestoreBg(struct Task *task)
+ static void FieldMoveShowMonOutdoorsEffect_End(struct Task *task)
+ {
+     IntrCallback callback;
+-    LoadWordFromTwoHalfwords((u16 *)&task->data[13], (u32 *)&callback);
++    LoadPtrFromTwoHalfwords(&task->data[13], callback);
+     SetVBlankCallback(callback);
+     InitTextBoxGfxAndPrinters();
+     FreeResourcesAndDestroySprite(&gSprites[task->tMonSpriteId], task->tMonSpriteId);
+@@ -2725,7 +2738,7 @@ static void VBlankCB_FieldMoveShowMonOutdoors(void)
+ {
+     IntrCallback callback;
+     struct Task *task = &gTasks[FindTaskIdByFunc(Task_FieldMoveShowMonOutdoors)];
+-    LoadWordFromTwoHalfwords((u16 *)&task->data[13], (u32 *)&callback);
++    LoadPtrFromTwoHalfwords(&task->data[13], callback);
+     callback();
+     SetGpuReg(REG_OFFSET_WIN0H, task->tWinHoriz);
+     SetGpuReg(REG_OFFSET_WIN0V, task->tWinVert);
+@@ -2782,7 +2795,7 @@ static void FieldMoveShowMonIndoorsEffect_Init(struct Task *task)
+ {
+     SetGpuReg(REG_OFFSET_BG0HOFS, task->tBgHoriz);
+     SetGpuReg(REG_OFFSET_BG0VOFS, task->tBgVert);
+-    StoreWordInTwoHalfwords((u16 *)&task->data[13], (u32)gMain.vblankCallback);
++    StorePtrInTwoHalfwords(&task->data[13], gMain.vblankCallback);
+     SetVBlankCallback(VBlankCB_FieldMoveShowMonIndoors);
+     task->tState++;
+ }
+@@ -2842,7 +2855,7 @@ static void FieldMoveShowMonIndoorsEffect_End(struct Task *task)
+     u16 bg0cnt;
+     bg0cnt = (REG_BG0CNT >> 8) << 11;
+     CpuFill32(0, (void *)VRAM + bg0cnt, 0x800);
+-    LoadWordFromTwoHalfwords((u16 *)&task->data[13], (u32 *)&intrCallback);
++    LoadPtrFromTwoHalfwords(&task->data[13], intrCallback);
+     SetVBlankCallback(intrCallback);
+     InitTextBoxGfxAndPrinters();
+     FreeResourcesAndDestroySprite(&gSprites[task->tMonSpriteId], task->tMonSpriteId);
+@@ -2855,7 +2868,7 @@ static void VBlankCB_FieldMoveShowMonIndoors(void)
+     IntrCallback intrCallback;
+     struct Task *task;
+     task = &gTasks[FindTaskIdByFunc(Task_FieldMoveShowMonIndoors)];
+-    LoadWordFromTwoHalfwords((u16 *)&task->data[13], (u32 *)&intrCallback);
++    LoadPtrFromTwoHalfwords(&task->data[13], intrCallback);
+     intrCallback();
+     SetGpuReg(REG_OFFSET_BG0HOFS, task->tBgHoriz);
+     SetGpuReg(REG_OFFSET_BG0VOFS, task->tBgVert);
 diff --git a/src/fldeff_cut.c b/src/fldeff_cut.c
 index 0fd9263e5..4fd834f48 100644
 --- a/src/fldeff_cut.c
@@ -14498,10 +15148,221 @@ index 3f087e5da..0d0935bfb 100644
      SetPlayerAvatarTransitionFlags(PLAYER_AVATAR_FLAG_ON_FOOT);
      return FALSE;
  }
+diff --git a/src/librfu_rfu.c b/src/librfu_rfu.c
+index 6f709491c..f73fc4b53 100644
+--- a/src/librfu_rfu.c
++++ b/src/librfu_rfu.c
+@@ -1780,7 +1780,7 @@ static void rfu_constructSendLLFrame(void)
+         }
+         if (pakcketSize != 0)
+         {
+-            while ((u32)llf_p & 3)
++            while ((uintptr_t)llf_p & 3)
+                 *llf_p++ = 0;
+             gRfuFixed->LLFBuffer[0] = pakcketSize;
+             if (gRfuLinkStatus->parentChild == MODE_CHILD)
+diff --git a/src/list_menu.c b/src/list_menu.c
+index 8257712a0..775cb7d0d 100644
+--- a/src/list_menu.c
++++ b/src/list_menu.c
+@@ -65,6 +65,20 @@ static void ListMenuRemoveCursorObject(u8 taskId, u32 cursorObjId);
+ static void SpriteCallback_ScrollIndicatorArrow(struct Sprite *sprite);
+ static void SpriteCallback_RedArrowCursor(struct Sprite *sprite);
+ 
++// A list menu's state lives in its task. On the GBA it is overlaid on the
++// task's 32-byte data[] array, but it holds three pointers and on a 64-bit
++// build is 48 bytes: it ran 16 bytes past data[] into the next task, whose
++// function pointer it then half-overwrote, and the scroll index was read from
++// the top half of a pointer -- the crash when scrolling the Bag. So on 64-bit
++// it gets a slot of its own per task; on 32-bit it is exactly as before.
++#if __SIZEOF_POINTER__ > 4
++static struct ListMenu sListMenus[NUM_TASKS];
++#define LIST_MENU(taskId) (&sListMenus[taskId])
++#else
++#define LIST_MENU(taskId) ((struct ListMenu *)gTasks[taskId].data)
++STATIC_ASSERT(sizeof(struct ListMenu) <= sizeof(gTasks[0].data), ListMenuFitsInTaskData);
++#endif
++
+ // EWRAM vars
+ static EWRAM_DATA struct {
+     s32 currItemId;
+@@ -389,7 +403,7 @@ u8 ListMenuInitInRect(struct ListMenuTemplate *listMenuTemplate, struct ListMenu
+ 
+ s32 ListMenu_ProcessInput(u8 listTaskId)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     if (JOY_NEW(A_BUTTON))
+     {
+@@ -450,7 +464,7 @@ s32 ListMenu_ProcessInput(u8 listTaskId)
+ 
+ void DestroyListMenuTask(u8 listTaskId, u16 *scrollOffset, u16 *selectedRow)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     if (scrollOffset != NULL)
+         *scrollOffset = list->scrollOffset;
+@@ -465,7 +479,7 @@ void DestroyListMenuTask(u8 listTaskId, u16 *scrollOffset, u16 *selectedRow)
+ 
+ void RedrawListMenu(u8 listTaskId)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     FillWindowPixelBuffer(list->template.windowId, PIXEL_FILL(list->template.fillValue));
+     ListMenuPrintEntries(list, list->scrollOffset, 0, list->template.maxShowed);
+@@ -476,7 +490,7 @@ void RedrawListMenu(u8 listTaskId)
+ // unused
+ void ChangeListMenuPals(u8 listTaskId, u8 cursorPal, u8 fillValue, u8 cursorShadowPal)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     list->template.cursorPal = cursorPal;
+     list->template.fillValue = fillValue;
+@@ -486,7 +500,7 @@ void ChangeListMenuPals(u8 listTaskId, u8 cursorPal, u8 fillValue, u8 cursorShad
+ // unused
+ void ChangeListMenuCoords(u8 listTaskId, u8 x, u8 y)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     SetWindowAttribute(list->template.windowId, WINDOW_TILEMAP_LEFT, x);
+     SetWindowAttribute(list->template.windowId, WINDOW_TILEMAP_TOP, y);
+@@ -518,7 +532,7 @@ s32 ListMenuTestInput(struct ListMenuTemplate *template, u32 scrollOffset, u32 s
+ 
+ void ListMenuGetCurrentItemArrayId(u8 listTaskId, u16 *arrayId)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     if (arrayId != NULL)
+         *arrayId = list->scrollOffset + list->selectedRow;
+@@ -526,7 +540,7 @@ void ListMenuGetCurrentItemArrayId(u8 listTaskId, u16 *arrayId)
+ 
+ void ListMenuGetScrollAndRow(u8 listTaskId, u16 *scrollOffset, u16 *selectedRow)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     if (scrollOffset != NULL)
+         *scrollOffset = list->scrollOffset;
+@@ -536,7 +550,7 @@ void ListMenuGetScrollAndRow(u8 listTaskId, u16 *scrollOffset, u16 *selectedRow)
+ 
+ u16 ListMenuGetYCoordForPrintingArrowCursor(u8 listTaskId)
+ {
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+     u8 yMultiplier = GetFontAttribute(list->template.fontId, FONTATTR_MAX_LETTER_HEIGHT) + list->template.itemVerticalPadding;
+ 
+     return list->selectedRow * yMultiplier + list->template.upText_Y;
+@@ -545,7 +559,7 @@ u16 ListMenuGetYCoordForPrintingArrowCursor(u8 listTaskId)
+ static u8 ListMenuInitInternal(struct ListMenuTemplate *listMenuTemplate, u16 scrollOffset, u16 selectedRow)
+ {
+     u8 listTaskId = CreateTask(ListMenuDummyTask, 0);
+-    struct ListMenu *list = (void *) gTasks[listTaskId].data;
++    struct ListMenu *list = LIST_MENU(listTaskId);
+ 
+     list->template = *listMenuTemplate;
+     list->scrollOffset = scrollOffset;
+@@ -883,13 +897,13 @@ void ListMenuDefaultCursorMoveFunc(s32 itemIndex, bool8 onInit, struct ListMenu
+ // unused
+ s32 ListMenuGetTemplateField(u8 taskId, u8 field)
+ {
+-    struct ListMenu *data = (void *) gTasks[taskId].data;
++    struct ListMenu *data = LIST_MENU(taskId);
+ 
+     switch (field)
+     {
+     case LISTFIELD_MOVECURSORFUNC:
+     case LISTFIELD_MOVECURSORFUNC2:
+-        return (s32)(data->template.moveCursorFunc);
++        return PackPtr(data->template.moveCursorFunc);
+     case LISTFIELD_TOTALITEMS:
+         return data->template.totalItems;
+     case LISTFIELD_MAXSHOWED:
+@@ -927,13 +941,13 @@ s32 ListMenuGetTemplateField(u8 taskId, u8 field)
+ 
+ void ListMenuSetTemplateField(u8 taskId, u8 field, s32 value)
+ {
+-    struct ListMenu *data = (void *) &gTasks[taskId].data;
++    struct ListMenu *data = LIST_MENU(taskId);
+ 
+     switch (field)
+     {
+     case LISTFIELD_MOVECURSORFUNC:
+     case LISTFIELD_MOVECURSORFUNC2:
+-        data->template.moveCursorFunc = (void *)value;
++        data->template.moveCursorFunc = UnpackPtr(value);
+         break;
+     case LISTFIELD_TOTALITEMS:
+         data->template.totalItems = value;
 diff --git a/src/m4a.c b/src/m4a.c
-index f6499e673..dc474c74a 100644
+index f6499e673..20fb4df0c 100644
 --- a/src/m4a.c
 +++ b/src/m4a.c
+@@ -399,10 +399,10 @@ void SoundInit(struct SoundInfo *soundInfo)
+                    | SOUND_ALL_MIX_FULL;
+     REG_SOUNDBIAS_H = (REG_SOUNDBIAS_H & 0x3F) | 0x40;
+ 
+-    REG_DMA1SAD = (s32)soundInfo->pcmBuffer;
+-    REG_DMA1DAD = (s32)&REG_FIFO_A;
+-    REG_DMA2SAD = (s32)soundInfo->pcmBuffer + PCM_DMA_BUF_SIZE;
+-    REG_DMA2DAD = (s32)&REG_FIFO_B;
++    REG_DMA1SAD = (uintptr_t)soundInfo->pcmBuffer;
++    REG_DMA1DAD = (uintptr_t)&REG_FIFO_A;
++    REG_DMA2SAD = (uintptr_t)soundInfo->pcmBuffer + PCM_DMA_BUF_SIZE;
++    REG_DMA2DAD = (uintptr_t)&REG_FIFO_B;
+ 
+     SOUND_INFO_PTR = soundInfo;
+     CpuFill32(0, soundInfo, sizeof(struct SoundInfo));
+@@ -534,7 +534,7 @@ void SoundClear(void)
+     {
+         ((struct SoundChannel *)chan)->statusFlags = 0;
+         i--;
+-        chan = (void *)((s32)chan + sizeof(struct SoundChannel));
++        chan = (void *)((uintptr_t)chan + sizeof(struct SoundChannel));
+     }
+ 
+     chan = soundInfo->cgbChans;
+@@ -548,7 +548,7 @@ void SoundClear(void)
+             soundInfo->CgbOscOff(i);
+             ((struct CgbChannel *)chan)->statusFlags = 0;
+             i++;
+-            chan = (void *)((s32)chan + sizeof(struct CgbChannel));
++            chan = (void *)((uintptr_t)chan + sizeof(struct CgbChannel));
+         }
+     }
+ 
+@@ -1034,7 +1034,7 @@ void CgbSound(void)
+                     #endif
+                     // fallthrough
+                 case 2:
+-                    *nrx1ptr = ((u32)channels->wavePointer << 6) + channels->length;
++                    *nrx1ptr = ((uintptr_t)channels->wavePointer << 6) + channels->length;
+                     goto init_env_step_time_dir;
+                 case 3:
+                     if (channels->wavePointer != channels->currentPointer)
+@@ -1058,7 +1058,7 @@ void CgbSound(void)
+                     break;
+                 default:
+                     *nrx1ptr = channels->length;
+-                    *nrx3ptr = (u32)channels->wavePointer << 3;
++                    *nrx3ptr = (uintptr_t)channels->wavePointer << 3;
+                 init_env_step_time_dir:
+                     envelopeStepTimeAndDir = channels->attack + CGB_NRx2_ENV_DIR_INC;
+                     if (channels->length)
+@@ -1601,7 +1601,7 @@ void ply_xwave(struct MusicPlayerInfo *mplayInfo, struct MusicPlayerTrack *track
+     READ_XCMD_BYTE(wav, 2)
+     READ_XCMD_BYTE(wav, 3)
+ 
+-    track->tone.wav = (struct WaveData *)wav;
++    track->tone.wav = (struct WaveData *)(uintptr_t)wav; // GBA-only path
+     track->cmdPtr += 4;
+ }
+ 
 @@ -1736,7 +1736,10 @@ start_song:
      gPokemonCrySongs[i].tone = tone;
      gPokemonCrySongs[i].part[0] = &gPokemonCrySongs[i].part0;
@@ -14588,7 +15449,7 @@ index 10d5d4d74..7af5810ae 100644
      sHeapSize = heapSize;
      PutFirstMemBlockHeader(heapStart, heapSize);
 diff --git a/src/menu.c b/src/menu.c
-index dd43e310d..1b1f7e7b2 100644
+index dd43e310d..56a0d1edc 100644
 --- a/src/menu.c
 +++ b/src/menu.c
 @@ -1805,7 +1805,7 @@ void DecompressAndLoadBgGfxUsingHeap(u8 bgId, const void *src, u32 size, u16 off
@@ -14609,8 +15470,64 @@ index dd43e310d..1b1f7e7b2 100644
          DestroyTask(taskId);
      }
  }
+@@ -1910,8 +1910,9 @@ void ResetBgPositions(void)
+ void BgDmaFill(u32 bg, u8 value, int offset, int size)
+ {
+     int temp = (!GetBgAttribute(bg, BG_ATTR_PALETTEMODE)) ? 32 : 64;
+-    void *addr = (void *)((GetBgAttribute(bg, BG_ATTR_CHARBASEINDEX) * 0x4000) + (GetBgAttribute(bg, BG_ATTR_BASETILE) + offset) * temp);
+-    RequestDma3Fill(value << 24 | value << 16 | value << 8 | value, VRAM + addr, size * temp, 1);
++    // A byte offset into VRAM, not an address -- keep it an integer.
++    uintptr_t addr = (GetBgAttribute(bg, BG_ATTR_CHARBASEINDEX) * 0x4000) + (GetBgAttribute(bg, BG_ATTR_BASETILE) + offset) * temp;
++    RequestDma3Fill(value << 24 | value << 16 | value << 8 | value, (void *)(VRAM + addr), size * temp, 1);
+ }
+ 
+ void AddTextPrinterParameterized3(u8 windowId, u8 fontId, u8 left, u8 top, const u8 *color, s8 speed, const u8 *str)
+diff --git a/src/mystery_event_script.c b/src/mystery_event_script.c
+index b146bbab3..385139f1d 100644
+--- a/src/mystery_event_script.c
++++ b/src/mystery_event_script.c
+@@ -59,7 +59,7 @@ static void InitMysteryEventScript(struct ScriptContext *ctx, u8 *script)
+ {
+     InitScriptContext(ctx, gMysteryEventScriptCmdTable, gMysteryEventScriptCmdTableEnd);
+     SetupBytecodeScript(ctx, script);
+-    ctx->mScriptBase = (u32)script;
++    ctx->mScriptBase = (uintptr_t)script;
+     ctx->mOffset = 0;
+     ctx->mStatus = MEVENT_STATUS_LOAD_OK;
+     ctx->mValid = FALSE;
+@@ -314,7 +314,7 @@ bool8 MEScrCmd_givepokemon(struct ScriptContext *ctx)
+     struct Pokemon pokemon;
+     u16 species;
+     u16 heldItem;
+-    u32 data = ScriptReadWord(ctx) - ctx->mOffset + ctx->mScriptBase;
++    uintptr_t data = ScriptReadWord(ctx) - ctx->mOffset + ctx->mScriptBase;
+     void *pokemonPtr = (void *)data;
+     void *mailPtr = (void *)(data + sizeof(struct Pokemon));
+ 
+@@ -357,7 +357,7 @@ bool8 MEScrCmd_givepokemon(struct ScriptContext *ctx)
+ 
+ bool8 MEScrCmd_addtrainer(struct ScriptContext *ctx)
+ {
+-    u32 data = ScriptReadWord(ctx) - ctx->mOffset + ctx->mScriptBase;
++    uintptr_t data = ScriptReadWord(ctx) - ctx->mOffset + ctx->mScriptBase;
+     memcpy(&gSaveBlock2Ptr->frontier.ereaderTrainer, (void *)data, sizeof(gSaveBlock2Ptr->frontier.ereaderTrainer));
+     ValidateEReaderTrainer();
+     StringExpandPlaceholders(gStringVar4, gText_MysteryEventNewTrainer);
+diff --git a/src/party_menu.c b/src/party_menu.c
+index 7cde1a018..7ac730993 100644
+--- a/src/party_menu.c
++++ b/src/party_menu.c
+@@ -1894,7 +1894,7 @@ static void ResetHPTaskData(u8 taskId, u8 caseId, u32 hp)
+             tPartyId = hp;
+             break;
+         case 5:
+-            SetTaskFuncWithFollowupFunc(taskId, Task_PartyMenuModifyHP, (TaskFunc)hp); // >casting hp as a taskfunc
++            SetTaskFuncWithFollowupFunc(taskId, Task_PartyMenuModifyHP, (TaskFunc)(uintptr_t)hp); // >casting hp as a taskfunc
+             break;
+     }
+ }
 diff --git a/src/platform/bios.c b/src/platform/bios.c
-index f13c6fd90..34bc3ceff 100644
+index f13c6fd90..6ecd8cbda 100644
 --- a/src/platform/bios.c
 +++ b/src/platform/bios.c
 @@ -1,4 +1,5 @@
@@ -14628,6 +15545,33 @@ index f13c6fd90..34bc3ceff 100644
  struct SoundInfo *SOUND_INFO_PTR;
  
  static uint32_t CPUReadMemory(const void *src)
+@@ -309,7 +310,7 @@ void RLUnCompVram(const u32 *src, void *dest)
+             while (blockHeader-- && remaining)
+             {
+                 remaining--;
+-                if ((u32)dest & 1)
++                if ((uintptr_t)dest & 1)
+                 {
+                     halfWord |= block << 8;
+                     CPUWriteHalfWord((void *)((uintptr_t)dest ^ 1), halfWord);
+@@ -327,7 +328,7 @@ void RLUnCompVram(const u32 *src, void *dest)
+                 remaining--;
+                 u8 byte = CPUReadByte(src);
+                 src++;
+-                if ((u32)dest & 1)
++                if ((uintptr_t)dest & 1)
+                 {
+                     halfWord |= byte << 8;
+                     CPUWriteHalfWord((void *)((uintptr_t)dest ^ 1), halfWord);
+@@ -338,7 +339,7 @@ void RLUnCompVram(const u32 *src, void *dest)
+             }
+         }
+     }
+-    if ((u32)dest & 1)
++    if ((uintptr_t)dest & 1)
+     {
+         padding--;
+         dest++;
 diff --git a/src/platform/dma.c b/src/platform/dma.c
 index fd5982ff3..52afbe082 100644
 --- a/src/platform/dma.c
@@ -14662,11 +15606,50 @@ index fd5982ff3..52afbe082 100644
      dma->size = control & 0x1ffff;
      dma->control = control >> 16;
  
+diff --git a/src/platform/gba_easy_draw.c b/src/platform/gba_easy_draw.c
+index 289fec823..d839f5543 100644
+--- a/src/platform/gba_easy_draw.c
++++ b/src/platform/gba_easy_draw.c
+@@ -923,8 +923,13 @@ void DrawFrame(uint16_t *pixels)
+             }
+         }
+ 
+-        memsetu16(&pixels[i * DISPLAY_WIDTH], backdropColor, DISPLAY_WIDTH);
+-        DrawScanline(&pixels[i * DISPLAY_WIDTH], i);
++        // pixels == NULL is a skipped frame: keep the per-line interrupts
++        // and DMAs below, skip only the rendering.
++        if (pixels != NULL)
++        {
++            memsetu16(&pixels[i * DISPLAY_WIDTH], backdropColor, DISPLAY_WIDTH);
++            DrawScanline(&pixels[i * DISPLAY_WIDTH], i);
++        }
+         
+         REG_DISPSTAT |= INTR_FLAG_HBLANK;
+ 
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..07fc80d8b 100644
+index e6f4aaf6a..53deb9e9a 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -57,6 +57,7 @@ struct SiiRtcInfo internalClock;
+@@ -20,6 +20,7 @@
+ #endif
+ 
+ #include "global.h"
++#include "constants/species.h"
+ #include "platform.h"
+ #include "rtc.h"
+ #include "gba/defines.h"
+@@ -43,6 +44,10 @@ SDL_Texture *sdlBorderTexture;
+ static u8 sBorderBackgroundCount = 1;
+ SDL_AudioDeviceID sdlAudioDevice;
+ SDL_sem *vBlankSemaphore;
++// Posted by the game thread when a frame is ready to present, so the main
++// thread can block on it rather than spin on isFrameAvailable.
++static SDL_sem *frameReadySemaphore;
++#define MAX_CATCHUP_FRAMES 4
+ SDL_atomic_t isFrameAvailable;
+ bool speedUp = false;
+ unsigned int videoScale = 1;
+@@ -57,6 +62,7 @@ struct SiiRtcInfo internalClock;
  
  static FILE *sSaveFile = NULL;
  static char sSavePath[1024] = "pokeemerald.sav";
@@ -14674,7 +15657,7 @@ index e6f4aaf6a..07fc80d8b 100644
  static char sConfigPath[1024] = "pokeemerald.cfg";
  static u8 sBorderBackground;
  static bool sHasBorderBackgroundConfig;
-@@ -87,8 +88,240 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
+@@ -87,8 +93,292 @@ static void HandleTouchEvent(const SDL_TouchFingerEvent *event);
  static void DrawTouchControls(void);
  #endif
  
@@ -14909,13 +15892,65 @@ index e6f4aaf6a..07fc80d8b 100644
 +    }
 +}
 +
++// Everything drawn around the game image each displayed frame: clear, the
++// desktop border background, the scaled game image and its frame.
++static void ComposeFrame(void)
++{
++    SDL_RenderClear(sdlRenderer);
++#if defined(NATIVE_LINUX) || defined(_WIN32)
++    u8 backgroundOption = Platform_GetBorderBackground();
++    if (backgroundOption < sBorderBackgroundCount
++     && sdlBackgroundTextures[backgroundOption] != NULL)
++        SDL_RenderCopy(sdlRenderer, sdlBackgroundTextures[backgroundOption], NULL, NULL);
++    int outputWidth;
++    int outputHeight;
++    SDL_GetRendererOutputSize(sdlRenderer, &outputWidth, &outputHeight);
++    int gameHeight;
++    int gameWidth;
++    if (sPlatformSettings[PLATFORM_SETTING_INTEGER_SCALE])
++    {
++        int scale = outputWidth / DISPLAY_WIDTH;
++        if (outputHeight / DISPLAY_HEIGHT < scale)
++            scale = outputHeight / DISPLAY_HEIGHT;
++        if (scale < 1)
++            scale = 1;
++        gameWidth = DISPLAY_WIDTH * scale;
++        gameHeight = DISPLAY_HEIGHT * scale;
++    }
++    else
++    {
++        gameHeight = outputHeight * 8 / 9;
++        gameWidth = gameHeight * 3 / 2;
++    }
++    SDL_Rect gameViewport = {(outputWidth - gameWidth) / 2,
++                             (outputHeight - gameHeight) / 2,
++                             gameWidth, gameHeight};
++    SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, &gameViewport);
++    if (sPlatformSettings[PLATFORM_SETTING_BORDER] && sdlBorderTexture != NULL)
++    {
++        SDL_Rect borderSource = {141, 18, 1000, 683};
++        int innerWidth = gameViewport.w - 2;
++        int innerHeight = gameViewport.h - 2;
++        SDL_Rect borderViewport = {
++            gameViewport.x + 1 - innerWidth * 19 / 961,
++            gameViewport.y + 1 - innerHeight * 20 / 643,
++            innerWidth * 1000 / 961,
++            innerHeight * 683 / 643
++        };
++        SDL_RenderCopy(sdlRenderer, sdlBorderTexture, &borderSource, &borderViewport);
++    }
++#else
++    SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, NULL);
++#endif
++}
++
  int main(int argc, char **argv)
  {
 +    InstallCrashHandler();
      // Open an output console on Windows
  #ifdef _WIN32
      AllocConsole() ;
-@@ -125,9 +358,14 @@ int main(int argc, char **argv)
+@@ -125,12 +415,26 @@ int main(int argc, char **argv)
      {
          SDL_snprintf(sSavePath, sizeof(sSavePath), "%spokeemerald.sav", prefPath);
          SDL_snprintf(sConfigPath, sizeof(sConfigPath), "%spokeemerald.cfg", prefPath);
@@ -14930,7 +15965,19 @@ index e6f4aaf6a..07fc80d8b 100644
      ReadSaveFile(sSavePath);
      ReadConfigFile();
  
-@@ -156,6 +394,8 @@ int main(int argc, char **argv)
++    // Headless tests need to reach deep into the game in CI-sized time; at
++    // real speed 150s is only ~9000 frames, not enough to leave the truck.
++    {
++        const char *ts = SDL_getenv("POKE_TIMESCALE");
++
++        if (ts != NULL && SDL_atof(ts) > 0.0)
++            timeScale = SDL_atof(ts);
++    }
++
+ #ifdef __ANDROID__
+     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+ #endif
+@@ -156,6 +460,8 @@ int main(int argc, char **argv)
          return 1;
      }
  
@@ -14939,7 +15986,188 @@ index e6f4aaf6a..07fc80d8b 100644
      SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
      SDL_RenderClear(sdlRenderer);
      SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-@@ -1057,16 +1297,75 @@ u16 GetXInputKeys()
+@@ -251,6 +557,7 @@ int main(int argc, char **argv)
+ 
+     isFrameAvailable.value = 0;
+     vBlankSemaphore = SDL_CreateSemaphore(0);
++    frameReadySemaphore = SDL_CreateSemaphore(0);
+ 
+     SDL_AudioSpec want;
+ 
+@@ -284,98 +591,86 @@ int main(int argc, char **argv)
+ 
+     while (isRunning)
+     {
++        int owed, k;
++        bool8 drew = FALSE;
++        double dt;
++
+         ProcessEvents();
+ 
+-        if (!paused)
++        if (paused)
++        {
++            SDL_Delay(10);
++            lastGameTime = SDL_GetPerformanceCounter();
++            continue;
++        }
++
++        dt = fixedTimestep / timeScale;
++        curGameTime = SDL_GetPerformanceCounter();
++        accumulator += (double)(curGameTime - lastGameTime) / (double)SDL_GetPerformanceFrequency();
++        lastGameTime = curGameTime;
++
++        // Bounded catch-up. A device that briefly falls behind runs the owed
++        // logic frames back to back and draws only the last, so the game keeps
++        // its 60Hz pace instead of slowing down; beyond MAX_CATCHUP_FRAMES the
++        // debt is dropped, so a long stall (a backgrounded app, a GC pause)
++        // does not turn into a burst of fast-forward.
++        if (accumulator > dt * MAX_CATCHUP_FRAMES)
++            accumulator = dt * MAX_CATCHUP_FRAMES;
++        owed = (int)(accumulator / dt);
++
++        if (owed == 0)
+         {
+-            double dt = fixedTimestep / timeScale; // TODO: Fix speedup
++            // Nothing is due yet. Sleep off most of the remainder rather than
++            // spinning: the old loop busy-waited here, holding a core at 100%,
++            // which on a phone means heat, then thermal throttling, then
++            // exactly the dropped frames this loop exists to prevent.
++            double ms = (dt - accumulator) * 1000.0;
++
++            if (ms >= 2.0)
++                SDL_Delay((Uint32)(ms - 1.0));
++            continue;
++        }
+ 
+-            curGameTime = SDL_GetPerformanceCounter();
+-            double deltaTime = (double)((curGameTime - lastGameTime) / (double)SDL_GetPerformanceFrequency());
+-            if (deltaTime > (dt * 5))
+-                deltaTime = dt;
+-            lastGameTime = curGameTime;
++        for (k = 0; k < owed; k++)
++        {
++            bool8 last = (k == owed - 1);
+ 
+-            accumulator += deltaTime;
++            // Block until the game thread has finished its frame, instead of
++            // polling a flag. The timeout keeps events flowing (Android pause,
++            // resume, quit) if the game thread is ever slow to arrive.
++            if (SDL_SemWaitTimeout(frameReadySemaphore, 100) != 0)
++                break;
+ 
+-            while (accumulator >= dt)
+-            {
+-                if (SDL_AtomicGet(&isFrameAvailable))
+-                {
+-                    VDraw(sdlTexture);
+-                    SDL_RenderClear(sdlRenderer);
+-#if defined(NATIVE_LINUX) || defined(_WIN32)
+-                    u8 backgroundOption = Platform_GetBorderBackground();
+-                    if (backgroundOption < sBorderBackgroundCount
+-                     && sdlBackgroundTextures[backgroundOption] != NULL)
+-                        SDL_RenderCopy(sdlRenderer, sdlBackgroundTextures[backgroundOption], NULL, NULL);
+-                    int outputWidth;
+-                    int outputHeight;
+-                    SDL_GetRendererOutputSize(sdlRenderer, &outputWidth, &outputHeight);
+-                    int gameHeight;
+-                    int gameWidth;
+-                    if (sPlatformSettings[PLATFORM_SETTING_INTEGER_SCALE])
+-                    {
+-                        int scale = outputWidth / DISPLAY_WIDTH;
+-                        if (outputHeight / DISPLAY_HEIGHT < scale)
+-                            scale = outputHeight / DISPLAY_HEIGHT;
+-                        if (scale < 1)
+-                            scale = 1;
+-                        gameWidth = DISPLAY_WIDTH * scale;
+-                        gameHeight = DISPLAY_HEIGHT * scale;
+-                    }
+-                    else
+-                    {
+-                        gameHeight = outputHeight * 8 / 9;
+-                        gameWidth = gameHeight * 3 / 2;
+-                    }
+-                    SDL_Rect gameViewport = {(outputWidth - gameWidth) / 2,
+-                                             (outputHeight - gameHeight) / 2,
+-                                             gameWidth, gameHeight};
+-                    SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, &gameViewport);
+-                    if (sPlatformSettings[PLATFORM_SETTING_BORDER] && sdlBorderTexture != NULL)
+-                    {
+-                        SDL_Rect borderSource = {141, 18, 1000, 683};
+-                        int innerWidth = gameViewport.w - 2;
+-                        int innerHeight = gameViewport.h - 2;
+-                        SDL_Rect borderViewport = {
+-                            gameViewport.x + 1 - innerWidth * 19 / 961,
+-                            gameViewport.y + 1 - innerHeight * 20 / 643,
+-                            innerWidth * 1000 / 961,
+-                            innerHeight * 683 / 643
+-                        };
+-                        SDL_RenderCopy(sdlRenderer, sdlBorderTexture, &borderSource, &borderViewport);
+-                    }
+-#else
+-                    SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, NULL);
+-#endif
+-#ifdef __ANDROID__
+-                    SDL_RenderPresent(sdlRenderer);
+-#endif
+-                    SDL_AtomicSet(&isFrameAvailable, 0);
++            // Skipped frames still run every scanline's VCOUNT/HBLANK interrupt
++            // and HBlank DMA -- game state depends on those -- and only skip
++            // turning the scanlines into pixels.
++            VDraw(last ? sdlTexture : NULL);
++            SDL_AtomicSet(&isFrameAvailable, 0);
+ 
+-                    REG_DISPSTAT |= INTR_FLAG_VBLANK;
++            REG_DISPSTAT |= INTR_FLAG_VBLANK;
+ 
+-                    RunDMAs(DMA_HBLANK);
++            RunDMAs(DMA_HBLANK);
+ 
+ #ifdef __ANDROID__
+-                    if (REG_IE & INTR_FLAG_VBLANK)
++            if (REG_IE & INTR_FLAG_VBLANK)
+ #else
+-                    if (REG_DISPSTAT & DISPSTAT_VBLANK_INTR)
++            if (REG_DISPSTAT & DISPSTAT_VBLANK_INTR)
+ #endif
+-                        gIntrTable[4]();
+-                    REG_DISPSTAT &= ~INTR_FLAG_VBLANK;
++                gIntrTable[4]();
++            REG_DISPSTAT &= ~INTR_FLAG_VBLANK;
+ 
+-                    SDL_SemPost(vBlankSemaphore);
++            SDL_SemPost(vBlankSemaphore);
+ 
+-                    accumulator -= dt;
+-                }
+-            }
++            accumulator -= dt;
++            drew |= last;
+         }
+ 
+-#ifndef __ANDROID__
+-        SDL_RenderPresent(sdlRenderer);
+-#endif
++        // One present per displayed frame, paced by vsync where it is on.
++        if (drew)
++        {
++            ComposeFrame();
++            SDL_RenderPresent(sdlRenderer);
++        }
+     }
+ 
+     //StoreSaveFile();
+@@ -479,7 +774,8 @@ static void StoreConfigFile(void)
+ 
+ static void ApplyPlatformSettings(void)
+ {
+-    SDL_RenderSetVSync(sdlRenderer, sPlatformSettings[PLATFORM_SETTING_VSYNC]);
++    // A headless speed-up run (POKE_TIMESCALE) must not be paced by a display.
++    SDL_RenderSetVSync(sdlRenderer, SDL_getenv("POKE_TIMESCALE") ? 0 : sPlatformSettings[PLATFORM_SETTING_VSYNC]);
+ #if defined(NATIVE_LINUX) || defined(_WIN32)
+     SDL_SetWindowFullscreen(sdlWindow, sPlatformSettings[PLATFORM_SETTING_FULLSCREEN]
+                                       ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+@@ -1057,32 +1353,249 @@ u16 GetXInputKeys()
  }
  #endif // _WIN32
  
@@ -14951,6 +16179,65 @@ index e6f4aaf6a..07fc80d8b 100644
 +//
 +// presses that button for a few frames at that frame number. With the variable
 +// unset nothing changes at all.
++// main.h cannot be included here (its gIntrTable declaration conflicts with
++// this file's), so declare just the leading fields of struct Main.
++struct MainCallbacks { void (*callback1)(void); void (*callback2)(void); };
++extern struct MainCallbacks gMain;
++
++// POKE_TEST_BATTLES=1 (headless testing only): whenever the player stands in
++// the overworld with control, heal the party, give it a Pokemon if it has
++// none, and start a wild battle against a random species at a random level.
++// Random play never gets a battle this early in the story, and battles are
++// where most of the pointer-width fixes live -- scripts, controllers,
++// animations -- so this is what exercises them.
++void CB2_Overworld(void);
++bool8 ArePlayerFieldControlsLocked(void);
++bool8 ScriptContext_IsEnabled(void);
++u8 ScriptGiveMon(u16 species, u8 level, u16 item, u32 unused1, u32 unused2, u8 unused3);
++void CreateScriptedWildMon(u16 species, u8 level, u16 item);
++void BattleSetup_StartScriptedWildBattle(void);
++void HealPlayerParty(void);
++u8 CalculatePlayerPartyCount(void);
++
++static void TestBattleHook(unsigned long frame, unsigned long *rng)
++{
++    static int enabled = -1;
++    static unsigned long freeSince;
++    static int battles;
++    u16 species;
++
++    if (enabled < 0)
++        enabled = SDL_getenv("POKE_TEST_BATTLES") != NULL;
++    if (!enabled)
++        return;
++    if (gMain.callback2 != CB2_Overworld || ArePlayerFieldControlsLocked() || ScriptContext_IsEnabled())
++    {
++        freeSince = 0;
++        return;
++    }
++    // Let a returned-to overworld settle, and let the fuzzer walk a bit.
++    if (freeSince == 0)
++        freeSince = frame;
++    if (frame - freeSince < 300)
++        return;
++    freeSince = 0;
++
++    // Species 252-276 are unused Unown placeholders; skip them.
++    do
++    {
++        *rng = *rng * 6364136223846793005UL + 1442695040888963407UL;
++        species = 1 + (*rng >> 33) % (NUM_SPECIES - 1);
++    } while (species >= 252 && species <= 276);
++
++    if (CalculatePlayerPartyCount() == 0)
++        ScriptGiveMon(SPECIES_MUDKIP, 30, 0, 0, 0, 0);
++    HealPlayerParty();
++    CreateScriptedWildMon(species, 2 + (*rng >> 45) % 60, 0);
++    SDL_Log("TESTBATTLE %d vs species %u", ++battles, species);
++    BattleSetup_StartScriptedWildBattle();
++}
++
++
 +static u16 AutoKeys(void)
 +{
 +    static const struct { const char *name; u16 bit; } names[] = {
@@ -14972,6 +16259,19 @@ index e6f4aaf6a..07fc80d8b 100644
 +    frame++;
 +    if (script == NULL)
 +        return 0;
++    {
++        static unsigned long battleRng = 0x9E3779B97F4A7C15UL;
++        TestBattleHook(frame, &battleRng);
++    }
++    // Progress trace for headless runs: where the game is, so a test that
++    // "passes" can be checked to have actually reached what it meant to test.
++    if (frame % 1000 == 0)
++        SDL_Log("autokeys frame %lu: map %d.%d pos %d,%d cb2 %p", frame,
++                gSaveBlock1Ptr ? gSaveBlock1Ptr->location.mapGroup : -1,
++                gSaveBlock1Ptr ? gSaveBlock1Ptr->location.mapNum : -1,
++                gSaveBlock1Ptr ? gSaveBlock1Ptr->pos.x : -1,
++                gSaveBlock1Ptr ? gSaveBlock1Ptr->pos.y : -1,
++                (void *)gMain.callback2);
 +
 +    // Held for 8 frames so the game samples it as a fresh press.
 +    for (p = script; *p != '\0'; p++)
@@ -14999,6 +16299,47 @@ index e6f4aaf6a..07fc80d8b 100644
 +        if (*p == '\0')
 +            break;
 +    }
++    // POKE_FUZZ=<seed>: once the scripted presses run out, keep playing with
++    // seeded random input -- mostly walking, some A/B, occasionally START for
++    // the menus -- to cover code no fixed route reaches. Same seed, same run.
++    {
++        static long fuzzSeed = -1;
++        static unsigned long lastScripted, rng, held;
++        static u16 fuzzKeys;
++
++        if (fuzzSeed < 0)
++        {
++            const char *f = SDL_getenv("POKE_FUZZ");
++            const char *q;
++            fuzzSeed = f ? SDL_atoi(f) : 0;
++            rng = (unsigned long)fuzzSeed * 2654435761UL + 1;
++            for (q = script; *q != '\0'; q++)
++                if (q == script || q[-1] == ' ')
++                {
++                    unsigned long at = SDL_strtoul(q, NULL, 10);
++                    if (at > lastScripted)
++                        lastScripted = at;
++                }
++        }
++        if (fuzzSeed > 0 && frame > lastScripted + 60)
++        {
++            if (held == 0)
++            {
++                static const u16 pick[] = {
++                    DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT,
++                    DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT,
++                    A_BUTTON, A_BUTTON, A_BUTTON, B_BUTTON, B_BUTTON,
++                    START_BUTTON, 0,
++                };
++                rng = rng * 6364136223846793005UL + 1442695040888963407UL;
++                fuzzKeys = pick[(rng >> 33) % (sizeof(pick) / sizeof(pick[0]))];
++                held = 6 + (rng >> 20) % 40;
++            }
++            held--;
++            // Release for a frame now and then so presses register as new.
++            keys |= (held % 12 == 0) ? 0 : fuzzKeys;
++        }
++    }
 +    return keys;
 +}
 +
@@ -15018,6 +16359,82 @@ index e6f4aaf6a..07fc80d8b 100644
  }
  
  void VDraw(SDL_Texture *texture)
+ {
+     static uint16_t gbaImage[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+     static uint32_t image[DISPLAY_WIDTH * DISPLAY_HEIGHT];
++    static uint32_t colorLut[0x8000];
++    static bool8 lutReady;
++
++    // A skipped frame (texture == NULL) still has to walk every scanline:
++    // DrawFrame fires the VCOUNT and HBLANK interrupts and HBlank DMAs that
++    // game state depends on. It just does not produce pixels.
++    DrawFrame(texture != NULL ? gbaImage : NULL);
++    if (texture == NULL)
++    {
++        REG_VCOUNT = 161;
++        return;
++    }
+ 
+-    memset(gbaImage, 0, sizeof(gbaImage));
+-    DrawFrame(gbaImage);
++    // BGR555 -> ARGB8888 through a table, instead of three integer divides per
++    // pixel, 38400 pixels, every frame. (No memset of gbaImage first either:
++    // DrawFrame writes every pixel of every line, backdrop included.)
++    if (!lutReady)
++    {
++        for (int c = 0; c < 0x8000; c++)
++        {
++            uint32_t r = (c & 0x1F) * 255 / 31;
++            uint32_t g = ((c >> 5) & 0x1F) * 255 / 31;
++            uint32_t b = ((c >> 10) & 0x1F) * 255 / 31;
++            colorLut[c] = 0xFF000000 | (r << 16) | (g << 8) | b;
++        }
++        lutReady = TRUE;
++    }
+     for (int i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++)
++        image[i] = colorLut[gbaImage[i] & 0x7FFF];
++
++    // Headless runs can't be watched, so POKE_SHOT_EVERY=n writes every n-th
++    // drawn frame to shot_NNNNNN.bmp -- to check a test reached the screen it
++    // claims to, not just that it did not crash on the way.
+     {
+-        uint16_t color = gbaImage[i];
+-        uint32_t r = (color & 0x1F) * 255 / 31;
+-        uint32_t g = ((color >> 5) & 0x1F) * 255 / 31;
+-        uint32_t b = ((color >> 10) & 0x1F) * 255 / 31;
+-        image[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
++        static long every = -1, drawn;
++
++        if (every < 0)
++        {
++            const char *e = SDL_getenv("POKE_SHOT_EVERY");
++            every = e ? SDL_atoi(e) : 0;
++        }
++        if (every > 0 && (drawn++ % every) == 0)
++        {
++            SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(image, DISPLAY_WIDTH, DISPLAY_HEIGHT, 32,
++                                                         DISPLAY_WIDTH * 4, 0x00FF0000, 0x0000FF00,
++                                                         0x000000FF, 0xFF000000);
++            if (surf != NULL)
++            {
++                char name[32];
++
++                SDL_snprintf(name, sizeof(name), "shot_%06ld.bmp", drawn);
++                SDL_SaveBMP(surf, name);
++                SDL_FreeSurface(surf);
++            }
++        }
+     }
+     SDL_UpdateTexture(texture, NULL, image, DISPLAY_WIDTH * sizeof(Uint32));
+     REG_VCOUNT = 161; // prep for being in VBlank period
+@@ -1097,6 +1610,7 @@ int DoMain(void *data)
+ void VBlankIntrWait(void)
+ {
+     SDL_AtomicSet(&isFrameAvailable, 1);
++    SDL_SemPost(frameReadySemaphore);
+     SDL_SemWait(vBlankSemaphore);
+ }
+ 
 diff --git a/src/pointer_handle.c b/src/pointer_handle.c
 new file mode 100644
 index 000000000..0c93522d1
@@ -15100,6 +16517,68 @@ index 000000000..0c93522d1
 +}
 +
 +#endif
+diff --git a/src/pokeball.c b/src/pokeball.c
+index dccf9e901..a6831269a 100644
+--- a/src/pokeball.c
++++ b/src/pokeball.c
+@@ -672,7 +672,7 @@ static void Task_PlayCryWhenReleasedFromBall(u8 taskId)
+ #ifndef PORTABLE
+     struct Pokemon *mon = (void *)(u32)((gTasks[taskId].tCryTaskMonPtr1 << 16) | (u16)(gTasks[taskId].tCryTaskMonPtr2));
+ #else
+-    struct Pokemon *mon = (void *)(u32)(((u16)gTasks[taskId].tCryTaskMonPtr1 << 16) | (u16)(gTasks[taskId].tCryTaskMonPtr2));
++    struct Pokemon *mon = UnpackPtr(((u16)gTasks[taskId].tCryTaskMonPtr1 << 16) | (u16)(gTasks[taskId].tCryTaskMonPtr2));
+ #endif
+ 
+     switch (gTasks[taskId].tCryTaskState)
+@@ -811,8 +811,8 @@ static void SpriteCB_ReleaseMonFromBall(struct Sprite *sprite)
+         gTasks[taskId].tCryTaskWantedCry = wantedCryCase;
+         gTasks[taskId].tCryTaskBattler = battler;
+         gTasks[taskId].tCryTaskMonSpriteId = gBattlerSpriteIds[sprite->sBattler];
+-        gTasks[taskId].tCryTaskMonPtr1 = (u32)(mon) >> 16;
+-        gTasks[taskId].tCryTaskMonPtr2 = (u32)(mon);
++        gTasks[taskId].tCryTaskMonPtr1 = PackPtr(mon) >> 16;
++        gTasks[taskId].tCryTaskMonPtr2 = PackPtr(mon);
+         gTasks[taskId].tCryTaskState = 0;
+     }
+ 
+diff --git a/src/pokedex.c b/src/pokedex.c
+index 760b2a241..522edca08 100644
+--- a/src/pokedex.c
++++ b/src/pokedex.c
+@@ -5267,7 +5267,7 @@ void SetSearchRectHighlight(u8 flags, u8 x, u8 y, u8 width)
+ {
+     u16 i;
+     u16 temp; //should be a pointer, but does not match as one
+-    u32 ptr = (u32)GetBgTilemapBuffer(3); //same as above
++    u8 *ptr = GetBgTilemapBuffer(3); //same as above
+ 
+     for (i = 0; i < width; i++)
+     {
+diff --git a/src/pokemon.c b/src/pokemon.c
+index c3fb49ba7..cd18cf4ad 100644
+--- a/src/pokemon.c
++++ b/src/pokemon.c
+@@ -6740,15 +6740,17 @@ const u8 *GetTrainerPartnerName(void)
+     }
+ }
+ 
++// The two data slots hold a handle, not the pointer -- see pointer_handle.c.
+ #define READ_PTR_FROM_TASK(taskId, dataId)                      \
+-    (void *)(                                                   \
++    UnpackPtr(                                                  \
+     ((u16)(gTasks[taskId].data[dataId]) |                       \
+     ((u16)(gTasks[taskId].data[dataId + 1]) << 16)))
+ 
+ #define STORE_PTR_IN_TASK(ptr, taskId, dataId)                 \
+ {                                                              \
+-    gTasks[taskId].data[dataId] = (u32)(ptr);                  \
+-    gTasks[taskId].data[dataId + 1] = (u32)(ptr) >> 16;        \
++    u32 packed_ = PackPtr(ptr);                                \
++    gTasks[taskId].data[dataId] = packed_;                     \
++    gTasks[taskId].data[dataId + 1] = packed_ >> 16;           \
+ }
+ 
+ #define sAnimId    data[2]
 diff --git a/src/pokemon_animation.c b/src/pokemon_animation.c
 index 0ab025fd9..147eee481 100644
 --- a/src/pokemon_animation.c
@@ -15143,6 +16622,19 @@ index 0ab025fd9..147eee481 100644
  
      battler = sprite->data[0];
      nature = GetNature(&gPlayerParty[gBattlerPartyIndexes[battler]]);
+diff --git a/src/pokemon_icon.c b/src/pokemon_icon.c
+index caed0bcdc..c4b91ed87 100644
+--- a/src/pokemon_icon.c
++++ b/src/pokemon_icon.c
+@@ -1190,7 +1190,7 @@ const u8 *GetMonIconTiles(u16 species, bool32 handleDeoxys)
+     const u8 *iconSprite = gMonIconTable[species];
+     if (species == SPECIES_DEOXYS && handleDeoxys == TRUE)
+     {
+-        iconSprite = (const u8 *)(0x400 + (u32)iconSprite); // use the specific Deoxys form icon (Speed in this case)
++        iconSprite += 0x400; // use the specific Deoxys form icon (Speed in this case)
+     }
+     return iconSprite;
+ }
 diff --git a/src/pokemon_jump.c b/src/pokemon_jump.c
 index 326512acf..87c669994 100644
 --- a/src/pokemon_jump.c
@@ -15291,6 +16783,27 @@ index ce17f33cf..f45674312 100644
  
      PokenavCopyPalette(pal1, pal2, 2, 12, ++data[0], sp8);
      LoadPalette(sp8, BG_PLTT_ID(3) + 1, PLTT_SIZEOF(2));
+diff --git a/src/record_mixing.c b/src/record_mixing.c
+index c5d915a9d..5e1cdafe1 100644
+--- a/src/record_mixing.c
++++ b/src/record_mixing.c
+@@ -582,13 +582,13 @@ static void Task_SendPacket_SwitchToReceive(u8 taskId)
+ 
+ static void *LoadPtrFromTaskData(const u16 *asShort)
+ {
+-    return (void *)(asShort[0] | (asShort[1] << 16));
++    return UnpackPtr((u16)asShort[0] | ((u16)asShort[1] << 16));
+ }
+ 
+ static void StorePtrInTaskData(void *records, u16 *asShort)
+ {
+-    asShort[0] = (u32)records;
+-    asShort[1] = ((u32)records >> 16);
++    asShort[0] = PackPtr(records);
++    asShort[1] = (PackPtr(records) >> 16);
+ }
+ 
+ static u8 GetMultiplayerId_(void)
 diff --git a/src/save.c b/src/save.c
 index f60b25bd1..d1cea023e 100644
 --- a/src/save.c
@@ -15659,7 +17172,7 @@ index 39a6ec7cc..5d3487054 100644
      CreateDecorationShop2Menu(ptr);
      ScriptContext_Stop();
 diff --git a/src/script.c b/src/script.c
-index 3136340d7..c57703341 100644
+index 3136340d7..15037f655 100644
 --- a/src/script.c
 +++ b/src/script.c
 @@ -174,6 +174,21 @@ u16 ScriptReadHalfword(struct ScriptContext *ctx)
@@ -15684,6 +17197,81 @@ index 3136340d7..c57703341 100644
  u32 ScriptReadWord(struct ScriptContext *ctx)
  {
      u32 value0 = *(ctx->scriptPtr++);
+@@ -289,7 +304,7 @@ u8 *MapHeaderGetScriptTable(u8 tag)
+             mapScripts++;
+             return T2_READ_PTR(mapScripts);
+         }
+-        mapScripts += 5;
++        mapScripts += 1 + sizeof(void *); // tag byte + an unaligned pointer
+     }
+ }
+ 
+@@ -325,7 +340,7 @@ u8 *MapHeaderCheckScriptTable(u8 tag)
+         // Run map script if vars are equal
+         if (VarGet(varIndex1) == VarGet(varIndex2))
+             return T2_READ_PTR(ptr);
+-        ptr += 4;
++        ptr += sizeof(void *);
+     }
+ }
+ 
+diff --git a/src/shop.c b/src/shop.c
+index 338e06793..bebb04763 100644
+--- a/src/shop.c
++++ b/src/shop.c
+@@ -416,8 +416,8 @@ static void Task_ShopMenu(u8 taskId)
+ static void Task_HandleShopMenuBuy(u8 taskId)
+ {
+     s16 *data = gTasks[taskId].data;
+-    tCallbackHi = (u32)CB2_InitBuyMenu >> 16;
+-    tCallbackLo = (u32)CB2_InitBuyMenu;
++    tCallbackHi = PackPtr(CB2_InitBuyMenu) >> 16;
++    tCallbackLo = PackPtr(CB2_InitBuyMenu);
+     gTasks[taskId].func = Task_GoToBuyOrSellMenu;
+     FadeScreen(FADE_TO_BLACK, 0);
+ }
+@@ -425,8 +425,8 @@ static void Task_HandleShopMenuBuy(u8 taskId)
+ static void Task_HandleShopMenuSell(u8 taskId)
+ {
+     s16 *data = gTasks[taskId].data;
+-    tCallbackHi = (u32)CB2_GoToSellMenu >> 16;
+-    tCallbackLo = (u32)CB2_GoToSellMenu;
++    tCallbackHi = PackPtr(CB2_GoToSellMenu) >> 16;
++    tCallbackLo = PackPtr(CB2_GoToSellMenu);
+     gTasks[taskId].func = Task_GoToBuyOrSellMenu;
+     FadeScreen(FADE_TO_BLACK, 0);
+ }
+@@ -455,7 +455,7 @@ static void Task_GoToBuyOrSellMenu(u8 taskId)
+     if (!gPaletteFade.active)
+     {
+         DestroyTask(taskId);
+-        SetMainCallback2((void *)((u16)tCallbackHi << 16 | (u16)tCallbackLo));
++        SetMainCallback2((MainCallback)UnpackPtr(((u16)tCallbackHi << 16) | (u16)tCallbackLo));
+     }
+ }
+ 
+diff --git a/src/slot_machine.c b/src/slot_machine.c
+index 8b9226279..5d3a78423 100644
+--- a/src/slot_machine.c
++++ b/src/slot_machine.c
+@@ -1116,7 +1116,7 @@ static void PlaySlotMachine_Internal(u8 machineId, MainCallback exitCallback)
+ {
+     struct Task *task = &gTasks[CreateTask(SlotMachineDummyTask, 0xFF)];
+     task->tMachineId = machineId;
+-    StoreWordInTwoHalfwords(&task->tExitCallback, (intptr_t)exitCallback);
++    StorePtrInTwoHalfwords(&task->tExitCallback, exitCallback);
+ }
+ 
+ // Extracts and assigns machineId and exit callback from task.
+@@ -1124,7 +1124,7 @@ static void SlotMachine_InitFromTask(void)
+ {
+     struct Task *task = &gTasks[FindTaskIdByFunc(SlotMachineDummyTask)];
+     sSlotMachine->machineId = task->tMachineId;
+-    LoadWordFromTwoHalfwords((u16 *)&task->tExitCallback, (u32 *)&sSlotMachine->prevMainCb);
++    LoadPtrFromTwoHalfwords(&task->tExitCallback, sSlotMachine->prevMainCb);
+ }
+ 
+ static void SlotMachineDummyTask(u8 taskId)
 diff --git a/src/task.c b/src/task.c
 index b188cbbcb..6ed6a308d 100644
 --- a/src/task.c
@@ -15806,6 +17394,28 @@ index b188cbbcb..6ed6a308d 100644
 +}
 +#endif
 +
+diff --git a/src/trainer_see.c b/src/trainer_see.c
+index f7b19aa8d..81f8b62c2 100644
+--- a/src/trainer_see.c
++++ b/src/trainer_see.c
+@@ -627,7 +627,7 @@ static void Task_SetBuriedTrainerMovement(u8 taskId)
+     struct Task *task = &gTasks[taskId];
+     struct ObjectEvent *objEvent;
+ 
+-    LoadWordFromTwoHalfwords((u16*) &task->tObjEvent, (u32 *)&objEvent);
++    LoadPtrFromTwoHalfwords(&task->tObjEvent, objEvent);
+     if (!task->data[7])
+     {
+         ObjectEventClearHeldMovement(objEvent);
+@@ -649,7 +649,7 @@ static void Task_SetBuriedTrainerMovement(u8 taskId)
+ // Called when a buried Trainer has the reveal_trainer movement applied, from direct interaction
+ void SetBuriedTrainerMovement(struct ObjectEvent *objEvent)
+ {
+-    StoreWordInTwoHalfwords((u16*) &gTasks[CreateTask(Task_SetBuriedTrainerMovement, 0)].tObjEvent, (u32)objEvent);
++    StorePtrInTwoHalfwords(&gTasks[CreateTask(Task_SetBuriedTrainerMovement, 0)].tObjEvent, objEvent);
+ }
+ 
+ void DoTrainerApproach(void)
 diff --git a/src/window.c b/src/window.c
 index 644048fad..61eb5d5cc 100644
 --- a/src/window.c
@@ -15838,7 +17448,7 @@ index 644048fad..61eb5d5cc 100644
          return 0;
      }
 diff --git a/tools/mapjson/mapjson.cpp b/tools/mapjson/mapjson.cpp
-index 8d8ec4e4e..0c07ccca0 100644
+index 8d8ec4e4e..62ec9caab 100644
 --- a/tools/mapjson/mapjson.cpp
 +++ b/tools/mapjson/mapjson.cpp
 @@ -139,24 +139,24 @@ string generate_map_header_text(Json map_data, Json layouts_data) {
@@ -15874,16 +17484,31 @@ index 8d8ec4e4e..0c07ccca0 100644
  
      text << "\t.2byte " << json_to_string(map_data, "music") << "\n"
           << "\t.2byte " << json_to_string(layout, "id") << "\n"
-@@ -204,7 +204,7 @@ string generate_map_connections_text(Json map_data) {
+@@ -193,7 +193,10 @@ string generate_map_connections_text(Json map_data) {
  
-     text << "\n" << mapName << "_MapConnections:\n"
+     ostringstream text;
+     text << get_generated_warning("data/maps/" + mapName + "/map.json", true);
+-    text << mapName << "_MapConnectionsList:\n";
++    // Both labels palign: _MapConnections is { s32 count; ptr list; } and an
++    // unaligned start shifts the count and the pointer by the misalignment --
++    // every outdoor map's connections read as garbage on a 64-bit build.
++    text << "\tpalign\n" << mapName << "_MapConnectionsList:\n";
+ 
+     for (auto &connection : map_data["connections"].array_items()) {
+         text << "\tconnection "
+@@ -202,9 +205,9 @@ string generate_map_connections_text(Json map_data) {
+              << json_to_string(connection, "map") << "\n";
+     }
+ 
+-    text << "\n" << mapName << "_MapConnections:\n"
++    text << "\n\tpalign\n" << mapName << "_MapConnections:\n"
           << "\t.4byte " << map_data["connections"].array_items().size() << "\n"
 -         << "\t.4byte " << mapName << "_MapConnectionsList\n\n";
 +         << "\tptr " << mapName << "_MapConnectionsList\n\n";
  
      return text.str();
  }
-@@ -217,7 +217,7 @@ string generate_map_events_text(Json map_data) {
+@@ -217,13 +220,18 @@ string generate_map_events_text(Json map_data) {
  
      ostringstream text;
      text << get_generated_warning("data/maps/" + mapName + "/map.json", true);
@@ -15892,7 +17517,61 @@ index 8d8ec4e4e..0c07ccca0 100644
  
      string objects_label, warps_label, coords_label, bgs_label;
  
-@@ -345,7 +345,7 @@ string generate_map_events_text(Json map_data) {
+     if (map_data["object_events"].array_items().size() > 0) {
+         objects_label = mapName + "_ObjectEvents";
+-        text << objects_label << ":\n";
++        // palign: every event array whose entries hold a pointer must start
++        // pointer-aligned. Each entry's own ptr pads relative to the absolute
++        // position, so an array starting 4 bytes off makes every entry 4 bytes
++        // short of the C struct and every script pointer in it garbage -- which
++        // is how no coord event anywhere ever fired on a 64-bit build.
++        text << "\tpalign\n" << objects_label << ":\n";
+         for (unsigned int i = 0; i < map_data["object_events"].array_items().size(); i++) {
+             auto obj_event = map_data["object_events"].array_items()[i];
+             string type = json_to_string(obj_event, "type", true);
+@@ -260,7 +268,12 @@ string generate_map_events_text(Json map_data) {
+ 
+     if (map_data["warp_events"].array_items().size() > 0) {
+         warps_label = mapName + "_MapWarps";
+-        text << warps_label << ":\n";
++        // palign: every event array whose entries hold a pointer must start
++        // pointer-aligned. Each entry's own ptr pads relative to the absolute
++        // position, so an array starting 4 bytes off makes every entry 4 bytes
++        // short of the C struct and every script pointer in it garbage -- which
++        // is how no coord event anywhere ever fired on a 64-bit build.
++        text << "\tpalign\n" << warps_label << ":\n";
+         for (auto &warp_event : map_data["warp_events"].array_items()) {
+             text << "\twarp_def "
+                  << json_to_string(warp_event, "x") << ", "
+@@ -276,7 +289,12 @@ string generate_map_events_text(Json map_data) {
+ 
+     if (map_data["coord_events"].array_items().size() > 0) {
+         coords_label = mapName + "_MapCoordEvents";
+-        text << coords_label << ":\n";
++        // palign: every event array whose entries hold a pointer must start
++        // pointer-aligned. Each entry's own ptr pads relative to the absolute
++        // position, so an array starting 4 bytes off makes every entry 4 bytes
++        // short of the C struct and every script pointer in it garbage -- which
++        // is how no coord event anywhere ever fired on a 64-bit build.
++        text << "\tpalign\n" << coords_label << ":\n";
+         for (auto &coord_event : map_data["coord_events"].array_items()) {
+             string type = json_to_string(coord_event, "type");
+             if (type == "trigger") {
+@@ -305,7 +323,12 @@ string generate_map_events_text(Json map_data) {
+ 
+     if (map_data["bg_events"].array_items().size() > 0) {
+         bgs_label = mapName + "_MapBGEvents";
+-        text << bgs_label << ":\n";
++        // palign: every event array whose entries hold a pointer must start
++        // pointer-aligned. Each entry's own ptr pads relative to the absolute
++        // position, so an array starting 4 bytes off makes every entry 4 bytes
++        // short of the C struct and every script pointer in it garbage -- which
++        // is how no coord event anywhere ever fired on a 64-bit build.
++        text << "\tpalign\n" << bgs_label << ":\n";
+         for (auto &bg_event : map_data["bg_events"].array_items()) {
+             string type = json_to_string(bg_event, "type");
+             if (type == "sign") {
+@@ -345,7 +368,7 @@ string generate_map_events_text(Json map_data) {
          bgs_label = "NULL";
      }
  
@@ -15901,7 +17580,7 @@ index 8d8ec4e4e..0c07ccca0 100644
           << "\tmap_events " << objects_label << ", " << warps_label << ", "
           << coords_label << ", " << bgs_label << "\n\n";
  
-@@ -440,16 +440,19 @@ string generate_groups_text(Json groups_data) {
+@@ -440,16 +463,19 @@ string generate_groups_text(Json groups_data) {
  
      for (auto &key : groups_data["group_order"].array_items()) {
          string group = json_to_string(key);
@@ -15925,7 +17604,7 @@ index 8d8ec4e4e..0c07ccca0 100644
      text << "\n";
  
      return text.str();
-@@ -600,14 +603,14 @@ string generate_layout_headers_text(Json layouts_data) {
+@@ -600,14 +626,14 @@ string generate_layout_headers_text(Json layouts_data) {
               << "\t.incbin \"" << json_to_string(layout, "border_filepath") << "\"\n\n"
               << blockdata_label << "::\n"
               << "\t.incbin \"" << json_to_string(layout, "blockdata_filepath") << "\"\n\n"
@@ -15945,7 +17624,7 @@ index 8d8ec4e4e..0c07ccca0 100644
          if (version == "firered") {
              text << "\t.byte " << json_to_string(layout, "border_width") << "\n"
                   << "\t.byte " << json_to_string(layout, "border_height") << "\n"
-@@ -624,13 +627,13 @@ string generate_layouts_table_text(Json layouts_data) {
+@@ -624,13 +650,13 @@ string generate_layouts_table_text(Json layouts_data) {
  
      text << get_generated_warning("data/layouts/layouts.json", true);
  

@@ -630,3 +630,68 @@ register that really does hold the whole address.
 This one could never have been found from the compiler warnings: both sides of
 the assignment are correctly typed, and the truncation happens in the emulated
 hardware register in between.
+
+## Round 3: making the desktop build a faithful oracle, then fixing what it found
+
+Every pointer-width bug up to here was found on a phone. The reason was
+structural: the desktop 64-bit build linked `-no-pie` and loaded below 4GB, so
+a pointer truncated to 32 bits still round-tripped and the build ran straight
+through bugs that killed the APK. Four changes turned it into a real oracle:
+
+| Tool | What it does |
+|---|---|
+| `PIE=1` (Makefile_pc) | Links position-independent, so the image loads above 4GB like Android. One relocation blocked it: every `SPECIAL_x` was `.global`, leaving a 16-bit relocation PIE forbids. Numbering is now split into `data/specials_list.inc` (verified byte-identical). |
+| `POKE_TIMESCALE=n` | Runs headless faster than real time (~550fps at 20). At 1x a CI-length run never left the moving truck. |
+| `POKE_FUZZ=seed` | After the scripted keys, plays on with seeded random input. |
+| `POKE_TEST_BATTLES=1` | Whenever the player is free in the overworld: heal, start a wild battle against a random species/level. Battles are otherwise unreachable this early. |
+| `POKE_SHOT_EVERY=n` | Writes every n-th frame to BMP, to check a run reached the screen it claims to. |
+
+What it found, in order:
+
+1. **Every coord event, sign and NPC after the first, on every map.** The
+   event arrays had no alignment before their labels. `ptr` pads relative to
+   the absolute position, so an array starting 4 bytes off is laid out 4 bytes
+   short per entry of the C struct. No coord event ever fired -- including the
+   truck's, which sets the exit warp: the "crashes getting off the truck"
+   report, which on desktop was a soft-lock in Petalburg with no map loaded.
+   Fixed in `mapjson` (`palign` before every event array). `object_event` and
+   `clone_event` were also short of the 64-bit struct's tail padding (28/24
+   vs 32 bytes); fixed in the macros, with `_Static_assert`s pinning the C
+   sizes. `android-build/aligncheck.py` now scans every assembled object for
+   a pointer table whose label is misaligned, and runs in CI.
+2. **Map connections**, same class (`_MapConnections` unaligned): garbage on
+   every outdoor map transition.
+3. **Door animation** and the rest of the 112 compiler-visible truncations:
+   applied from the reference batch with the PIE run as the gate. The batch's
+   earlier regression was that `script.c` had been widened to 9-byte map
+   script entries while `map.inc` had been reverted to aligned `ptr` -- the
+   two now agree (`ptr_stream`). **Truncation count: 0.**
+4. **List menus** (the Bag crash): `struct ListMenu` is overlaid on a task's
+   32-byte `data[]`; with three pointers it is 48 bytes on 64-bit, so it ran
+   into the next task. On 64-bit it now has a per-task side table.
+5. **Every battle hung after the first move.** Battle-script handlers read
+   operands at GBA offsets: `setbyte` read its value byte at `[5]`, which on
+   64-bit is inside the preceding 8-byte pointer, so `setbyte
+   sMOVEEND_STATE, 0` stored a pointer byte and `Cmd_moveend` spun forever.
+   13 handlers had this (`setbyte`, `addbyte`, `orbyte`, `jumpifbyte`,
+   `copyarray`, `handlelearnnewmove`, ... and contest AI `call`'s return
+   address). `android-build/cmdcheck.py` derives each command's operand
+   layout from its macro and cross-checks the handler; validated by
+   re-flagging all 13 on the pre-fix source. Clean across 270
+   pointer-carrying handlers in four engines; runs in CI.
+
+Result: four fuzz seeds each survive ~129,000 frames (about 36 minutes of
+play) and 16-22 random wild battles, with moves, animations, fainting,
+fleeing, party and summary screens, bag, save and trainer card all rendering.
+
+## 60fps
+
+The frame loop busy-spun the main thread while the game thread computed a
+frame (a core pinned at 100% -- on a phone, heat and then thermal throttling),
+serialised logic and drawing, and on falling behind simply ran slow. It now:
+blocks on a semaphore instead of spinning; sleeps until the next frame is due;
+runs up to 4 owed logic frames back to back when behind and draws only the
+last (skipped frames still run every scanline's VCOUNT/HBLANK interrupts and
+HBlank DMAs, which game state depends on); presents once per displayed frame,
+vsync-paced; and converts pixels through a lookup table instead of three
+divides each.
