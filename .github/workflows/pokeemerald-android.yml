@@ -42,6 +42,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential binutils-arm-none-eabi libpng-dev
+          # Emerald Arena's asset packer (tools/arena/*.py) uses Pillow.
+          sudo apt-get install -y python3-pil
           # The 64-bit job assembles the game data with the aarch64 binutils.
           sudo apt-get install -y binutils-aarch64-linux-gnu
 
@@ -190,7 +192,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential binutils-arm-none-eabi \
-                                  libpng-dev libsdl2-dev libsdl2-image-dev
+                                  libpng-dev libsdl2-dev libsdl2-image-dev python3-pil
 
       - name: Build and run
         run: ./android-build/build-native64.sh
@@ -243,7 +245,17 @@ jobs:
             Built from `${{ github.sha }}`. Debug-signed, so Android will ask
             you to allow installing from an unknown source.
 
-            Verified in CI: each APK packages exactly its own ABI, and the
-            64-bit code runs headless without crashing. Rendering, input,
-            battles and saving are not covered by any automated check.
+            Includes [Emerald Arena](https://github.com/GBurgardt/pokemon-emerald-arena)
+            v0.13.0 by GBurgardt: supported wild and single-trainer battles are
+            fought in real time. Move with the D-pad, **A** attacks, **B** +
+            direction dodges, **L/R** pick the attack, **START** opens the
+            Pokemon/Bag/Moves menu, hold **L+R** to aim a Poke Ball. Double,
+            link and unsupported battles stay classic. Quick try: on a fresh
+            save press **SELECT** on NEW GAME, then **L+R** in the field.
+            Pokemon sprites: PMDCollab SpriteCollab (see the mod's CREDITS.md).
+
+            Verified in CI on a 64-bit desktop build: no pointer truncation,
+            and the story route plus random play -- including random wild
+            battles and the arena -- runs without crashing. Not tested on a
+            device by CI.
           files: out/*.apk

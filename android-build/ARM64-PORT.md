@@ -695,3 +695,38 @@ last (skipped frames still run every scanline's VCOUNT/HBLANK interrupts and
 HBlank DMAs, which game state depends on); presents once per displayed frame,
 vsync-paced; and converts pixels through a lookup table instead of three
 divides each.
+
+## Emerald Arena
+
+[Emerald Arena](https://github.com/GBurgardt/pokemon-emerald-arena) (v0.13.0,
+pinned) adds real-time battles. It is built from pret/pokeemerald sources -- an
+overlay of ~8,200 lines of new C plus a patch to the battle engine -- so it can
+be compiled into this port. `emerald-arena.sh` fetches the overlay, applies
+`arena/0002-emerald-arena.patch` and runs the mod's own asset pipeline (which
+downloads its pinned PMD sprite sets). `EMERALD_ARENA=0` builds without it.
+
+The patch is the mod's engine patch rebased onto the fork, plus what a 64-bit
+OS needed that the GBA did not:
+
+- **Hand-assembled bytecode.** The arena resolves damage by assembling one
+  `accuracycheck failPtr, move` into a stack buffer, writing the pointer as a
+  `u32` and branching to byte 7. On 64-bit the instruction is 11 bytes and the
+  pointer 8; the old code truncated a stack address. Now written at full width
+  with the length from `sizeof(void *)`.
+- **Command-skipping hooks.** The arena's "quiet intro" early returns skipped
+  `printfromtable`/`playanimation`/`playanimation_var` by their GBA lengths
+  (5/7/10); rewritten in pointer width. All 17 hooks were checked against the
+  macro lengths, and `cmdcheck.py` stays clean.
+- **NULL reads that the GBA forgives.** Address 0 is readable BIOS on the GBA,
+  so dereferencing NULL quietly yields junk there and crashes everywhere else.
+  Fuzzing found two: the enemy AI reading the profile of a move the arena does
+  not support (`ArenaMoves_Profile` now returns a zeroed `ARENA_MOVE_NONE`
+  profile), and the map-name popup copying a window freed by the arena
+  transition (`CopyWindowToVram` skips a window without tile data, and
+  `RequestDma3Copy` refuses a NULL source).
+- Host tool fixes for Linux: `-lm`, and no `-Werror` on the asset packers.
+
+Verified on the 64-bit PIE build: 12 arena fuzz seeds (quick start, L+R, then
+random play with L/R and B+direction) at ~129,000 frames each, and 4 story
+seeds with random wild battles (22-32 each), all without a crash. Screenshots
+show real-time arena battles, effects, breakable props, EXP and capture.

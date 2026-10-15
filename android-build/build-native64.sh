@@ -33,6 +33,9 @@ done
 
 log "Building host tools and generated sources"
 make -j"$(nproc)" tools >/dev/null
+
+log "Adding Emerald Arena (real-time battles)"
+"$SCRIPT_DIR/emerald-arena.sh"
 make -j"$(nproc)" generated >/dev/null
 
 log "Generating binary assets"
@@ -135,8 +138,20 @@ for f in $(seq 8000 30 9500); do ROUTE="$ROUTE $f=A"; done
 AUTOKEYS="${POKE_AUTOKEYS:-$ROUTE}"
 SEEDS="${FUZZ_SEEDS:-1 2 3 4}"
 
+# Emerald Arena seeds: the mod's quick start (SELECT on NEW GAME: an
+# Oldale save with Charizard and five teammates), L+R to fight, then random
+# play -- which presses L/R to switch attacks and B+direction to dodge.
+ARENA_ROUTE=""
+for f in $(seq 600 100 1500); do ARENA_ROUTE="$ARENA_ROUTE $f=START"; done
+for f in $(seq 1600 30 2200); do ARENA_ROUTE="$ARENA_ROUTE $f=SELECT"; done
+for f in $(seq 3000 40 3600); do ARENA_ROUTE="$ARENA_ROUTE $f=A"; done
+ARENA_ROUTE="$ARENA_ROUTE 4000=LR"
+ARENA_SEEDS=""
+[ -f src/realtime_arena.c ] && ARENA_SEEDS="${ARENA_FUZZ_SEEDS:-101 102 103}"
+
 run_one() {  # run_one <seed> -- 0 means the fixed route with no fuzzing
-    local seed=$1 dir="run-$1"
+    local seed=$1 dir="run-$1" keys="$AUTOKEYS"
+    case " $ARENA_SEEDS " in *" $seed "*) keys="$ARENA_ROUTE" ;; esac
     rm -rf "$dir"; mkdir -p "$dir"
     # `|| st=$?`: a surviving run ends in timeout's 124, and under set -e a
     # bare nonzero status would abort here before recording it.
@@ -146,17 +161,17 @@ run_one() {  # run_one <seed> -- 0 means the fixed route with no fuzzing
     local st=0 battles=""
     [ "$seed" != 0 ] && battles="POKE_TEST_BATTLES=1"
     ( cd "$dir" && env $battles SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy POKE_TIMESCALE=20 \
-        POKE_FUZZ="$seed" POKE_AUTOKEYS="$AUTOKEYS" \
+        POKE_FUZZ="$seed" POKE_AUTOKEYS="$keys" \
         timeout "$RUN_SECONDS" ../pokeemerald > run.log 2>&1 ) || st=$?
     echo "$st" > "$dir/status"
 }
 
-log "Running route + fuzz seeds ($SEEDS) for ${RUN_SECONDS}s each at 20x"
-for seed in 0 $SEEDS; do run_one "$seed" & done
+log "Running route + fuzz seeds ($SEEDS) + arena seeds (${ARENA_SEEDS:-none}) for ${RUN_SECONDS}s each at 20x"
+for seed in 0 $SEEDS $ARENA_SEEDS; do run_one "$seed" & done
 wait
 
 fail=0
-for seed in 0 $SEEDS; do
+for seed in 0 $SEEDS $ARENA_SEEDS; do
     dir="run-$seed"; status=$(cat "$dir/status")
     reached=$(grep -a "autokeys frame" "$dir/run.log" | tail -1 | sed 's/.*autokeys //')
     if [ "$status" -eq 124 ]; then

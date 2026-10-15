@@ -15627,7 +15627,7 @@ index 289fec823..d839f5543 100644
          REG_DISPSTAT |= INTR_FLAG_HBLANK;
  
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index e6f4aaf6a..53deb9e9a 100644
+index e6f4aaf6a..b991f1d93 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
 @@ -20,6 +20,7 @@
@@ -16167,7 +16167,7 @@ index e6f4aaf6a..53deb9e9a 100644
  #if defined(NATIVE_LINUX) || defined(_WIN32)
      SDL_SetWindowFullscreen(sdlWindow, sPlatformSettings[PLATFORM_SETTING_FULLSCREEN]
                                        ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-@@ -1057,32 +1353,249 @@ u16 GetXInputKeys()
+@@ -1057,32 +1353,252 @@ u16 GetXInputKeys()
  }
  #endif // _WIN32
  
@@ -16244,6 +16244,8 @@ index e6f4aaf6a..53deb9e9a 100644
 +        { "A", A_BUTTON }, { "B", B_BUTTON }, { "START", START_BUTTON },
 +        { "SELECT", SELECT_BUTTON }, { "UP", DPAD_UP }, { "DOWN", DPAD_DOWN },
 +        { "LEFT", DPAD_LEFT }, { "RIGHT", DPAD_RIGHT },
++        // "LR" before "L": names match by prefix, first hit wins.
++        { "LR", L_BUTTON | R_BUTTON }, { "L", L_BUTTON }, { "R", R_BUTTON },
 +    };
 +    static unsigned long frame;
 +    static const char *script;
@@ -16330,6 +16332,7 @@ index e6f4aaf6a..53deb9e9a 100644
 +                    DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT,
 +                    A_BUTTON, A_BUTTON, A_BUTTON, B_BUTTON, B_BUTTON,
 +                    START_BUTTON, 0,
++                    L_BUTTON, R_BUTTON, L_BUTTON | R_BUTTON, B_BUTTON | DPAD_LEFT, B_BUTTON | DPAD_UP,
 +                };
 +                rng = rng * 6364136223846793005UL + 1442695040888963407UL;
 +                fuzzKeys = pick[(rng >> 33) % (sizeof(pick) / sizeof(pick[0]))];
@@ -16427,7 +16430,7 @@ index e6f4aaf6a..53deb9e9a 100644
      }
      SDL_UpdateTexture(texture, NULL, image, DISPLAY_WIDTH * sizeof(Uint32));
      REG_VCOUNT = 161; // prep for being in VBlank period
-@@ -1097,6 +1610,7 @@ int DoMain(void *data)
+@@ -1097,6 +1613,7 @@ int DoMain(void *data)
  void VBlankIntrWait(void)
  {
      SDL_AtomicSet(&isFrameAvailable, 1);
