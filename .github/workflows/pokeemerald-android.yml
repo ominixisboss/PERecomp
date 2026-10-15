@@ -254,6 +254,12 @@ jobs:
             save press **SELECT** on NEW GAME, then **L+R** in the field.
             Pokemon sprites: PMDCollab SpriteCollab (see the mod's CREDITS.md).
 
+            **Controls & themes:** tap the gear (left side, under SELECT) to pick
+            one of 9 screen themes and 8 button styles, change button size and
+            opacity, toggle vibration, arena buttons and diagonals, or drag the
+            buttons wherever you like. The D-pad is one disc you can roll your
+            thumb around; **BALL** is L+R in one tap; **< >** switch attacks.
+
             Verified in CI on a 64-bit desktop build: no pointer truncation,
             and the story route plus random play -- including random wild
             battles and the arena -- runs without crashing. Not tested on a

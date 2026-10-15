@@ -1,0 +1,1177 @@
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
+new file mode 100644
+index 000000000..0d0a9ee40
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
+@@ -0,0 +1,51 @@
++package com.pokeemerald.experimental;
++
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.RectF;
++import android.graphics.Typeface;
++
++import com.pokeemerald.experimental.controls.Painter;
++
++/** The controls' Painter over an Android Canvas. */
++final class CanvasPainter implements Painter {
++    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF rect = new RectF();
++    private final Path path = new Path();
++    private Canvas canvas;
++
++    CanvasPainter() {
++        fill.setStyle(Paint.Style.FILL);
++        stroke.setStyle(Paint.Style.STROKE);
++        text.setTextAlign(Paint.Align.CENTER);
++        text.setTypeface(Typeface.DEFAULT_BOLD);
++    }
++
++    CanvasPainter on(Canvas c) { canvas = c; return this; }
++
++    @Override public void fillCircle(float cx, float cy, float r, int argb) {
++        fill.setColor(argb); canvas.drawCircle(cx, cy, r, fill);
++    }
++    @Override public void strokeCircle(float cx, float cy, float r, float width, int argb) {
++        stroke.setColor(argb); stroke.setStrokeWidth(width); canvas.drawCircle(cx, cy, r, stroke);
++    }
++    @Override public void fillRoundRect(float l, float t, float r, float b, float radius, int argb) {
++        fill.setColor(argb); rect.set(l, t, r, b); canvas.drawRoundRect(rect, radius, radius, fill);
++    }
++    @Override public void strokeRoundRect(float l, float t, float r, float b, float radius, float width, int argb) {
++        stroke.setColor(argb); stroke.setStrokeWidth(width); rect.set(l, t, r, b);
++        canvas.drawRoundRect(rect, radius, radius, stroke);
++    }
++    @Override public void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3, int argb) {
++        fill.setColor(argb); path.reset(); path.moveTo(x1, y1); path.lineTo(x2, y2); path.lineTo(x3, y3);
++        path.close(); canvas.drawPath(path, fill);
++    }
++    @Override public void text(String s, float cx, float cy, float size, int argb) {
++        text.setColor(argb); text.setTextSize(size);
++        Paint.FontMetrics m = text.getFontMetrics();
++        canvas.drawText(s, cx, cy - (m.ascent + m.descent) / 2, text);
++    }
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
+new file mode 100644
+index 000000000..e7835b9ee
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
+@@ -0,0 +1,183 @@
++package com.pokeemerald.experimental;
++
++import android.app.AlertDialog;
++import android.content.Context;
++import android.graphics.Typeface;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.AdapterView;
++import android.widget.ArrayAdapter;
++import android.widget.Button;
++import android.widget.CompoundButton;
++import android.widget.LinearLayout;
++import android.widget.ScrollView;
++import android.widget.SeekBar;
++import android.widget.Spinner;
++import android.widget.Switch;
++import android.widget.TextView;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import com.pokeemerald.experimental.controls.ButtonStyle;
++import com.pokeemerald.experimental.controls.Settings;
++import com.pokeemerald.experimental.controls.Themes;
++
++/** The gear button's panel: theme, button style, size, opacity, toggles, layout editing. */
++final class ControlsSettingsDialog {
++    private ControlsSettingsDialog() {}
++
++    static void show(GbaControlsView view) {
++        Context c = view.getContext();
++        Settings s = view.settings();
++        int pad = dp(c, 16);
++
++        LinearLayout col = new LinearLayout(c);
++        col.setOrientation(LinearLayout.VERTICAL);
++        col.setPadding(pad, pad / 2, pad, pad / 2);
++
++        // Theme: only the ones whose background is actually packaged.
++        final List<Themes> themes = new ArrayList<>();
++        List<String> themeNames = new ArrayList<>();
++        for (Themes t : Themes.ALL) {
++            if (GbaControlsView.backgroundExists(c, t.background)) { themes.add(t); themeNames.add(t.name); }
++        }
++        themeNames.add("None (black)");
++        Spinner theme = spinner(c, themeNames);
++        int current = GbaControlsView.getBorderBackground(), selected = themes.size();
++        for (int i = 0; i < themes.size(); i++) if (themes.get(i).background == current) selected = i;
++        theme.setSelection(selected, false);
++        header(col, c, "Theme");
++        col.addView(theme);
++
++        List<String> styleNames = new ArrayList<>();
++        styleNames.add("Match theme");
++        for (ButtonStyle b : ButtonStyle.ALL) styleNames.add(b.name);
++        Spinner style = spinner(c, styleNames);
++        style.setSelection(s.style + 1, false);
++        header(col, c, "Button style");
++        col.addView(style);
++
++        header(col, c, "Button size");
++        SeekBar size = seek(c, 80, Math.round((s.scale - 0.7f) * 100));
++        col.addView(size);
++        header(col, c, "Button opacity");
++        SeekBar opacity = seek(c, 80, Math.round((s.opacity - 0.2f) * 100));
++        col.addView(opacity);
++
++        Switch haptics = toggle(c, "Vibrate on press", s.haptics);
++        Switch arena = toggle(c, "Arena buttons (BALL, < >)", s.arenaButtons);
++        Switch diag = toggle(c, "Diagonal directions", s.diagonals);
++        col.addView(haptics);
++        col.addView(arena);
++        col.addView(diag);
++
++        LinearLayout row = new LinearLayout(c);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        Button edit = new Button(c);
++        edit.setText("Move buttons");
++        Button reset = new Button(c);
++        reset.setText("Reset positions");
++        row.addView(edit, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
++        row.addView(reset, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
++        col.addView(row);
++
++        ScrollView scroll = new ScrollView(c);
++        scroll.addView(col);
++        final AlertDialog dialog = new AlertDialog.Builder(c, android.R.style.Theme_DeviceDefault_Dialog_Alert)
++                .setTitle("Controls & themes")
++                .setView(scroll)
++                .setPositiveButton("Done", null)
++                .create();
++
++        // Every change applies immediately, so the result is visible behind the panel.
++        theme.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
++            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
++                // "None" is the game's BACKGROUND OFF: one past the last image.
++                int bg = pos < themes.size() ? themes.get(pos).background : countBackgrounds(c);
++                GbaControlsView.setBorderBackground(bg);
++                view.settingsChanged();
++            }
++            @Override public void onNothingSelected(AdapterView<?> p) {}
++        });
++        style.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
++            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
++                s.style = pos - 1;
++                view.settingsChanged();
++            }
++            @Override public void onNothingSelected(AdapterView<?> p) {}
++        });
++        size.setOnSeekBarChangeListener(new Seek() {
++            @Override public void onProgressChanged(SeekBar b, int v, boolean user) {
++                s.scale = 0.7f + v / 100f;
++                view.settingsChanged();
++            }
++        });
++        opacity.setOnSeekBarChangeListener(new Seek() {
++            @Override public void onProgressChanged(SeekBar b, int v, boolean user) {
++                s.opacity = 0.2f + v / 100f;
++                view.settingsChanged();
++            }
++        });
++        CompoundButton.OnCheckedChangeListener toggles = (b, on) -> {
++            s.haptics = haptics.isChecked();
++            s.arenaButtons = arena.isChecked();
++            s.diagonals = diag.isChecked();
++            view.settingsChanged();
++        };
++        haptics.setOnCheckedChangeListener(toggles);
++        arena.setOnCheckedChangeListener(toggles);
++        diag.setOnCheckedChangeListener(toggles);
++        edit.setOnClickListener(v -> { dialog.dismiss(); view.startEditing(); });
++        reset.setOnClickListener(v -> { s.positions.clear(); view.settingsChanged(); });
++
++        dialog.show();
++    }
++
++    /** BG.png plus however many BGn.png follow it -- the game counts them the same way. */
++    private static int countBackgrounds(Context c) {
++        int n = 0;
++        while (n < 15 && GbaControlsView.backgroundExists(c, n)) n++;
++        return n;
++    }
++
++    private abstract static class Seek implements SeekBar.OnSeekBarChangeListener {
++        @Override public void onStartTrackingTouch(SeekBar b) {}
++        @Override public void onStopTrackingTouch(SeekBar b) {}
++    }
++
++    private static int dp(Context c, int v) {
++        return Math.round(v * c.getResources().getDisplayMetrics().density);
++    }
++
++    private static void header(LinearLayout col, Context c, String text) {
++        TextView t = new TextView(c);
++        t.setText(text);
++        t.setTypeface(Typeface.DEFAULT_BOLD);
++        t.setPadding(0, dp(c, 12), 0, dp(c, 2));
++        col.addView(t);
++    }
++
++    private static Spinner spinner(Context c, List<String> items) {
++        Spinner sp = new Spinner(c);
++        ArrayAdapter<String> a = new ArrayAdapter<>(c, android.R.layout.simple_spinner_item, items);
++        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
++        sp.setAdapter(a);
++        return sp;
++    }
++
++    private static SeekBar seek(Context c, int max, int value) {
++        SeekBar b = new SeekBar(c);
++        b.setMax(max);
++        b.setProgress(Math.max(0, Math.min(max, value)));
++        return b;
++    }
++
++    private static Switch toggle(Context c, String label, boolean on) {
++        Switch sw = new Switch(c);
++        sw.setText(label);
++        sw.setChecked(on);
++        sw.setPadding(0, dp(c, 8), 0, dp(c, 8));
++        return sw;
++    }
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
+index 7f1cea0b5..8fb864aa8 100644
+--- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
++++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
+@@ -1,188 +1,276 @@
+ package com.pokeemerald.experimental;
+ 
+ import android.content.Context;
+-import android.graphics.Canvas;
++import android.content.SharedPreferences;
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
++import android.graphics.Canvas;
+ import android.graphics.Color;
+ import android.graphics.Paint;
+ import android.graphics.Rect;
+-import android.graphics.RectF;
++import android.util.SparseArray;
++import android.view.HapticFeedbackConstants;
+ import android.view.KeyEvent;
+ import android.view.MotionEvent;
+ import android.view.View;
+ 
+ import java.io.IOException;
++import java.io.InputStream;
+ import java.util.Arrays;
+ 
+ import org.libsdl.app.SDLActivity;
+ 
++import com.pokeemerald.experimental.controls.ButtonStyle;
++import com.pokeemerald.experimental.controls.ControlsLayout;
++import com.pokeemerald.experimental.controls.ControlsRenderer;
++import com.pokeemerald.experimental.controls.Keys;
++import com.pokeemerald.experimental.controls.Settings;
++import com.pokeemerald.experimental.controls.Themes;
++
++/**
++ * The touch overlay: background theme around the game screen, and the
++ * controls. Layout, D-pad maths and drawing live in the pure-Java
++ * controls package (tested off-device); this class is the Android glue --
++ * touches, haptics, persistence and the settings dialog.
++ */
+ public final class GbaControlsView extends View {
+-    private static final int A = 1 << 0;
+-    private static final int B = 1 << 1;
+-    private static final int SELECT = 1 << 2;
+-    private static final int START = 1 << 3;
+-    private static final int RIGHT = 1 << 4;
+-    private static final int LEFT = 1 << 5;
+-    private static final int UP = 1 << 6;
+-    private static final int DOWN = 1 << 7;
+-    private static final int R = 1 << 8;
+-    private static final int L = 1 << 9;
+-
+-    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+-    private final Paint outline = new Paint(Paint.ANTI_ALIAS_FLAG);
+-    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private static final String PREFS = "controls", KEY = "settings";
++
++    /** Per-finger state: what it went down on, and for edits, its grab offset. */
++    private static final class Finger {
++        String downOn;
++        float grabX, grabY;
++    }
++
++    private final SparseArray<Finger> fingers = new SparseArray<>();
++    private final CanvasPainter painter = new CanvasPainter();
+     private final Paint borderPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+-    private final Bitmap[] backgrounds = new Bitmap[15];
+-    private int backgroundCount;
+-    private Bitmap border;
++    private final SharedPreferences prefs;
++    private Settings settings;
++    private ControlsLayout layout;
++    private boolean editing;
+     private int pressed;
+ 
++    private Bitmap background;
++    private int backgroundLoaded = -1;
++    private Bitmap border;
++
+     public GbaControlsView(Context context) {
+         super(context);
+         setBackgroundColor(Color.TRANSPARENT);
+-        outline.setColor(Color.argb(170, 255, 255, 255));
+-        outline.setStyle(Paint.Style.STROKE);
+-        outline.setStrokeWidth(3);
+-        text.setColor(Color.WHITE);
+-        text.setTextAlign(Paint.Align.CENTER);
+-        text.setFakeBoldText(true);
+-        try {
+-            backgrounds[0] = BitmapFactory.decodeStream(context.getAssets().open("BG.png"));
+-            backgroundCount = 1;
+-            for (int i = 1; i < backgrounds.length; i++) {
+-                try {
+-                    backgrounds[i] = BitmapFactory.decodeStream(context.getAssets().open("BG" + i + ".png"));
+-                    backgroundCount++;
+-                } catch (IOException ignored) {
+-                    break;
+-                }
+-            }
+-            border = BitmapFactory.decodeStream(context.getAssets().open("Border.png"));
++        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++        settings = Settings.parse(prefs.getString(KEY, null));
++        try (InputStream in = context.getAssets().open("Border.png")) {
++            border = BitmapFactory.decodeStream(in);
+         } catch (IOException ignored) {
+             border = null;
+         }
+     }
+ 
+-    private int sideWidth() {
+-        return Math.max((getWidth() - getHeight() * 3 / 2) / 2, getWidth() * 14 / 100);
++    Settings settings() { return settings; }
++
++    /** Called by the settings dialog after any change. */
++    void settingsChanged() {
++        prefs.edit().putString(KEY, settings.serialize()).apply();
++        rebuildLayout();
++    }
++
++    void startEditing() {
++        releaseAll();
++        editing = true;
++        rebuildLayout();
+     }
+ 
+-    private int unit() {
+-        return Math.min(sideWidth() / 3, getHeight() / 8);
++    private void rebuildLayout() {
++        if (getWidth() > 0 && getHeight() > 0)
++            layout = new ControlsLayout(getWidth(), getHeight(), settings, editing);
++        invalidate();
+     }
+ 
+-    private RectF controlRect(int control) {
+-        int side = sideWidth();
+-        int pad = unit();
+-        int padX = side * 2 / 3;
+-        int padY = getHeight() * 7 / 10;
+-        int button = Math.min(side * 2 / 5, getHeight() / 6);
++    static boolean backgroundExists(Context c, int index) {
++        try (InputStream in = c.getAssets().open(index == 0 ? "BG.png" : "BG" + index + ".png")) {
++            return true;
++        } catch (IOException e) {
++            return false;
++        }
++    }
++
++    // ---- touch ------------------------------------------------------------
++
++    @Override
++    public boolean onTouchEvent(MotionEvent event) {
++        if (layout == null) return true;
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_CANCEL) {
++            fingers.clear();
++            releaseAll();
++            return true;
++        }
++        int index = event.getActionIndex();
++        int id = event.getPointerId(index);
++        boolean down = action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN;
++        boolean up = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP;
++
++        if (down) {
++            Finger f = new Finger();
++            ControlsLayout.Item it = layout.itemAt(event.getX(index), event.getY(index));
++            f.downOn = it == null ? null : it.id;
++            if (editing && it != null) {
++                f.grabX = it.cx - event.getX(index);
++                f.grabY = it.cy - event.getY(index);
++            }
++            fingers.put(id, f);
++        }
++
++        if (editing) {
++            onEditTouch(event, up ? id : -1);
++        } else {
++            onPlayTouch(event, up ? index : -1);
++        }
+ 
+-        switch (control) {
+-        case UP:     return new RectF(padX - pad / 2f, padY - pad * 1.5f, padX + pad / 2f, padY - pad / 2f);
+-        case DOWN:   return new RectF(padX - pad / 2f, padY + pad / 2f, padX + pad / 2f, padY + pad * 1.5f);
+-        case LEFT:   return new RectF(padX - pad * 1.5f, padY - pad / 2f, padX - pad / 2f, padY + pad / 2f);
+-        case RIGHT:  return new RectF(padX + pad / 2f, padY - pad / 2f, padX + pad * 1.5f, padY + pad / 2f);
+-        case A:      return new RectF(getWidth() - side / 4f - button, getHeight() * .58f,
+-                                      getWidth() - side / 4f, getHeight() * .58f + button);
+-        case B:      return new RectF(getWidth() - side + side / 4f, getHeight() * .76f,
+-                                      getWidth() - side + side / 4f + button, getHeight() * .76f + button);
+-        case SELECT: return new RectF(side / 10f, getHeight() * .25f, side * .9f, getHeight() * .35f);
+-        case START:  return new RectF(getWidth() - side * .9f, getHeight() * .25f,
+-                                      getWidth() - side * .1f, getHeight() * .35f);
+-        case L:      return new RectF(side / 10f, getHeight() * .05f, side * .9f, getHeight() * .15f);
+-        case R:      return new RectF(getWidth() - side * .9f, getHeight() * .05f,
+-                                      getWidth() - side * .1f, getHeight() * .15f);
+-        default:     return new RectF();
++        if (up) {
++            Finger f = fingers.get(id);
++            fingers.remove(id);
++            if (!editing && f != null && ControlsLayout.GEAR.equals(f.downOn)) {
++                ControlsLayout.Item gear = layout.find(ControlsLayout.GEAR);
++                if (gear != null && layout.itemAt(event.getX(index), event.getY(index)) == gear)
++                    ControlsSettingsDialog.show(this);
++            }
+         }
++        return true;
+     }
+ 
+-    private int controlsAt(float x, float y) {
+-        int result = 0;
+-        int[] controls = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
+-        for (int control : controls) {
+-            if (controlRect(control).contains(x, y)) {
+-                result |= control;
++    private void onPlayTouch(MotionEvent event, int releasedIndex) {
++        int next = 0;
++        for (int i = 0; i < event.getPointerCount(); i++) {
++            if (i == releasedIndex) continue;
++            Finger f = fingers.get(event.getPointerId(i));
++            float x = event.getX(i), y = event.getY(i);
++            if (f != null && ControlsLayout.DPAD.equals(f.downOn)) {
++                // A thumb that started on the D-pad keeps steering it even
++                // after sliding off the disc, as on a real pad.
++                next |= layout.dpadKeys(layout.find(ControlsLayout.DPAD), x, y);
++            } else {
++                ControlsLayout.Item it = layout.itemAt(x, y);
++                // Sliding onto the D-pad from elsewhere does nothing: only a
++                // finger that went down there steers it.
++                if (it != null && it.shape != ControlsLayout.Shape.DPAD)
++                    next |= it.keys;
+             }
+         }
+-        return result;
++        setPressed(next);
+     }
+ 
+-    private int keyCode(int control) {
+-        switch (control) {
+-        case A:      return KeyEvent.KEYCODE_Z;
+-        case B:      return KeyEvent.KEYCODE_X;
+-        case SELECT: return KeyEvent.KEYCODE_BACKSLASH;
+-        case START:  return KeyEvent.KEYCODE_ENTER;
+-        case RIGHT:  return KeyEvent.KEYCODE_DPAD_RIGHT;
+-        case LEFT:   return KeyEvent.KEYCODE_DPAD_LEFT;
+-        case UP:     return KeyEvent.KEYCODE_DPAD_UP;
+-        case DOWN:   return KeyEvent.KEYCODE_DPAD_DOWN;
+-        case R:      return KeyEvent.KEYCODE_S;
+-        case L:      return KeyEvent.KEYCODE_A;
+-        default:     return KeyEvent.KEYCODE_UNKNOWN;
++    private void onEditTouch(MotionEvent event, int upId) {
++        for (int i = 0; i < event.getPointerCount(); i++) {
++            int id = event.getPointerId(i);
++            Finger f = fingers.get(id);
++            if (f == null || f.downOn == null) continue;
++            if (id == upId) {
++                if (ControlsLayout.DONE.equals(f.downOn)) {
++                    editing = false;
++                    settingsChanged();
++                    return;
++                }
++                if (ControlsLayout.RESET.equals(f.downOn)) {
++                    settings.positions.clear();
++                    settingsChanged();
++                    return;
++                }
++                continue;
++            }
++            if (ControlsLayout.DONE.equals(f.downOn) || ControlsLayout.RESET.equals(f.downOn)) continue;
++            ControlsLayout.Item it = layout.find(f.downOn);
++            if (it == null) continue;
++            float x = Settings.clamp(event.getX(i) + f.grabX, it.w / 2, getWidth() - it.w / 2);
++            float y = Settings.clamp(event.getY(i) + f.grabY, it.h / 2, getHeight() - it.h / 2);
++            it.cx = x; it.cy = y;
++            settings.positions.put(it.id, new float[] {x / getWidth(), y / getHeight()});
+         }
++        invalidate();
++    }
++
++    private void releaseAll() {
++        setPressed(0);
+     }
+ 
+     private void setPressed(int next) {
++        int newlyDown = next & ~pressed;
++        if (settings.haptics && newlyDown != 0) {
++            // A light tick for the D-pad rolling to a new direction, a key
++            // tap for buttons.
++            performHapticFeedback((newlyDown & ~Keys.DIRECTIONS) != 0
++                    ? HapticFeedbackConstants.VIRTUAL_KEY : HapticFeedbackConstants.CLOCK_TICK);
++        }
+         int changed = pressed ^ next;
+-        int[] controls = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
+-        for (int control : controls) {
+-            if ((changed & control) != 0) {
+-                int action = (next & control) != 0 ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP;
+-                KeyEvent event = new KeyEvent(action, keyCode(control));
++        for (int key : Keys.ALL) {
++            if ((changed & key) != 0) {
++                int action = (next & key) != 0 ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP;
++                KeyEvent event = new KeyEvent(action, keyCode(key));
+                 SDLActivity.handleKeyEvent(this, event.getKeyCode(), event, null);
+             }
+         }
+-        pressed = next;
+-        invalidate();
++        if (changed != 0) {
++            pressed = next;
++            invalidate();
++        }
+     }
+ 
+-    @Override
+-    public boolean onTouchEvent(MotionEvent event) {
+-        if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+-            setPressed(0);
+-            return true;
++    private static int keyCode(int key) {
++        switch (key) {
++        case Keys.A:      return KeyEvent.KEYCODE_Z;
++        case Keys.B:      return KeyEvent.KEYCODE_X;
++        case Keys.SELECT: return KeyEvent.KEYCODE_BACKSLASH;
++        case Keys.START:  return KeyEvent.KEYCODE_ENTER;
++        case Keys.RIGHT:  return KeyEvent.KEYCODE_DPAD_RIGHT;
++        case Keys.LEFT:   return KeyEvent.KEYCODE_DPAD_LEFT;
++        case Keys.UP:     return KeyEvent.KEYCODE_DPAD_UP;
++        case Keys.DOWN:   return KeyEvent.KEYCODE_DPAD_DOWN;
++        case Keys.R:      return KeyEvent.KEYCODE_S;
++        case Keys.L:      return KeyEvent.KEYCODE_A;
++        default:          return KeyEvent.KEYCODE_UNKNOWN;
+         }
++    }
+ 
+-        int releasedPointer = event.getActionMasked() == MotionEvent.ACTION_UP
+-                || event.getActionMasked() == MotionEvent.ACTION_POINTER_UP
+-                ? event.getActionIndex() : -1;
+-        int next = 0;
+-        for (int i = 0; i < event.getPointerCount(); i++) {
+-            if (i != releasedPointer) {
+-                next |= controlsAt(event.getX(i), event.getY(i));
+-            }
++    // ---- drawing ----------------------------------------------------------
++
++    ButtonStyle currentStyle() {
++        int style = settings.style;
++        if (style == Settings.MATCH_THEME) {
++            int theme = Themes.forBackground(getBorderBackground());
++            style = theme < 0 ? 0 : Themes.ALL[theme].style;
+         }
+-        setPressed(next);
+-        return true;
++        return ButtonStyle.ALL[style];
+     }
+ 
+-    private void drawControl(Canvas canvas, int control, String label) {
+-        RectF rect = controlRect(control);
+-        fill.setColor(Color.argb((pressed & control) != 0 ? 155 : 70, 255, 255, 255));
+-        canvas.drawRect(rect, fill);
+-        canvas.drawRect(rect, outline);
+-        if (label != null) {
+-            text.setTextSize(Math.min(rect.height() * .55f, rect.width() / Math.max(label.length() * .6f, 1)));
+-            Paint.FontMetrics metrics = text.getFontMetrics();
+-            float baseline = rect.centerY() - (metrics.ascent + metrics.descent) / 2;
+-            canvas.drawText(label, rect.centerX(), baseline, text);
++    /** Loads only the background in use: fifteen 1600x900 bitmaps would be ~85MB. */
++    private Bitmap backgroundFor(int index) {
++        if (index != backgroundLoaded) {
++            if (background != null) background.recycle();
++            background = null;
++            backgroundLoaded = index;
++            try (InputStream in = getContext().getAssets().open(index == 0 ? "BG.png" : "BG" + index + ".png")) {
++                background = BitmapFactory.decodeStream(in);
++            } catch (IOException ignored) {
++                // BACKGROUND OFF, or no such asset: just black around the game.
++            }
+         }
++        return background;
+     }
+ 
+     private void drawBorder(Canvas canvas) {
+         int scale = Math.max(1, Math.min(getWidth() / 240, getHeight() / 160));
+-        int gameWidth = 240 * scale;
+-        int gameHeight = 160 * scale;
+-        int gameX = (getWidth() - gameWidth) / 2;
+-        int gameY = (getHeight() - gameHeight) / 2;
+-
+-        int backgroundOption = getBorderBackground();
+-        if (backgroundOption < backgroundCount && backgrounds[backgroundOption] != null) {
+-            Bitmap background = backgrounds[backgroundOption];
+-            Rect output = new Rect(0, 0, getWidth(), getHeight());
++        int gameWidth = 240 * scale, gameHeight = 160 * scale;
++        int gameX = (getWidth() - gameWidth) / 2, gameY = (getHeight() - gameHeight) / 2;
++
++        Bitmap bg = backgroundFor(getBorderBackground());
++        if (bg != null) {
++            // Cover-scale: fill the screen keeping the art's proportions (the
++            // old code stretched 16:9 art across 20:9 phones).
++            float s = Math.max(getWidth() / (float) bg.getWidth(), getHeight() / (float) bg.getHeight());
++            int bw = Math.round(bg.getWidth() * s), bh = Math.round(bg.getHeight() * s);
++            Rect output = new Rect((getWidth() - bw) / 2, (getHeight() - bh) / 2,
++                                   (getWidth() + bw) / 2, (getHeight() + bh) / 2);
+             Rect[] regions = {
+                     new Rect(0, 0, getWidth(), gameY),
+                     new Rect(0, gameY + gameHeight, getWidth(), getHeight()),
+@@ -192,46 +280,42 @@ public final class GbaControlsView extends View {
+             for (Rect region : regions) {
+                 int state = canvas.save();
+                 canvas.clipRect(region);
+-                canvas.drawBitmap(background, null, output, borderPaint);
++                canvas.drawBitmap(bg, null, output, borderPaint);
+                 canvas.restoreToCount(state);
+             }
+         }
+ 
+         if (getPlatformSetting(4) != 0 && border != null) {
+-            int innerWidth = gameWidth - 2;
+-            int innerHeight = gameHeight - 2;
++            int innerWidth = gameWidth - 2, innerHeight = gameHeight - 2;
+             canvas.drawBitmap(border, new Rect(141, 18, 1141, 701),
+-                    new Rect(
+-                            gameX + 1 - innerWidth * 19 / 961,
+-                            gameY + 1 - innerHeight * 20 / 643,
+-                            gameX + 1 + innerWidth + innerWidth * 20 / 961,
+-                            gameY + 1 + innerHeight + innerHeight * 20 / 643),
++                    new Rect(gameX + 1 - innerWidth * 19 / 961,
++                             gameY + 1 - innerHeight * 20 / 643,
++                             gameX + 1 + innerWidth + innerWidth * 20 / 961,
++                             gameY + 1 + innerHeight + innerHeight * 20 / 643),
+                     borderPaint);
+         }
+     }
+ 
+-    private static native int getBorderBackground();
++    static native int getBorderBackground();
++    static native void setBorderBackground(int background);
+     private static native int getPlatformSetting(int setting);
+ 
+     @Override
+     protected void onDraw(Canvas canvas) {
+         super.onDraw(canvas);
+         drawBorder(canvas);
+-        drawControl(canvas, UP, null);
+-        drawControl(canvas, DOWN, null);
+-        drawControl(canvas, LEFT, null);
+-        drawControl(canvas, RIGHT, null);
+-        drawControl(canvas, A, "A");
+-        drawControl(canvas, B, "B");
+-        drawControl(canvas, SELECT, "SELECT");
+-        drawControl(canvas, START, "START");
+-        drawControl(canvas, L, "L");
+-        drawControl(canvas, R, "R");
++        if (layout != null)
++            ControlsRenderer.draw(painter.on(canvas), layout, currentStyle(), settings.opacity, pressed);
++        // The background can be changed from the game's own options menu, so
++        // keep redrawing at a low rate rather than only on touches.
++        if (getBorderBackground() != backgroundLoaded) invalidate();
++        else postInvalidateDelayed(500);
+     }
+ 
+     @Override
+     protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+         super.onSizeChanged(width, height, oldWidth, oldHeight);
++        rebuildLayout();
+         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+             setSystemGestureExclusionRects(Arrays.asList(
+                     new Rect(0, height / 2, width / 5, height),
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java
+new file mode 100644
+index 000000000..122b1df33
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java
+@@ -0,0 +1,37 @@
++package com.pokeemerald.experimental.controls;
++
++/** How the on-screen controls look. Alphas here are scaled by the user's opacity setting. */
++public final class ButtonStyle {
++    public final String name;
++    public final int face, pressed, outline, label, dpad, accentA, accentB;
++    public final boolean outlineOnly;
++
++    ButtonStyle(String name, int face, int pressed, int outline, int label, int dpad,
++                int accentA, int accentB, boolean outlineOnly) {
++        this.name = name; this.face = face; this.pressed = pressed; this.outline = outline;
++        this.label = label; this.dpad = dpad; this.accentA = accentA; this.accentB = accentB;
++        this.outlineOnly = outlineOnly;
++    }
++
++    static int argb(int a, int rgb) { return (a << 24) | (rgb & 0xFFFFFF); }
++
++    /** Index 0 is the original look. Order matters: it is what Settings stores. */
++    public static final ButtonStyle[] ALL = {
++        new ButtonStyle("Classic", argb(70, 0xFFFFFF), argb(155, 0xFFFFFF), argb(170, 0xFFFFFF),
++                argb(255, 0xFFFFFF), argb(70, 0xFFFFFF), 0, 0, false),
++        new ButtonStyle("GBA SP", argb(150, 0x2B2B33), argb(220, 0x4A4A58), argb(200, 0x111118),
++                argb(255, 0xE8E8F0), argb(160, 0x2B2B33), argb(190, 0x6B5BC8), argb(190, 0x6B5BC8), false),
++        new ButtonStyle("Famicom", argb(150, 0xD8D0C0), argb(220, 0xFFFFFF), argb(200, 0x6E1F1F),
++                argb(255, 0x3A2020), argb(170, 0x303030), argb(210, 0xB02020), argb(210, 0xB02020), false),
++        new ButtonStyle("Minimal", argb(0, 0xFFFFFF), argb(90, 0xFFFFFF), argb(150, 0xFFFFFF),
++                argb(200, 0xFFFFFF), argb(0, 0xFFFFFF), 0, 0, true),
++        new ButtonStyle("Emerald", argb(130, 0x0E6B4E), argb(210, 0x1FA67A), argb(200, 0x8FF0C8),
++                argb(255, 0xEFFFF8), argb(130, 0x0E6B4E), argb(200, 0x22B884), argb(200, 0x157A5C), false),
++        new ButtonStyle("Magma", argb(140, 0x5A1206), argb(220, 0xC8401A), argb(210, 0xFF9A3C),
++                argb(255, 0xFFE0C0), argb(140, 0x5A1206), argb(210, 0xE0501E), argb(210, 0x9A2A10), false),
++        new ButtonStyle("Aqua", argb(130, 0x0C3A6E), argb(210, 0x2A78C8), argb(210, 0x8CD0FF),
++                argb(255, 0xE6F4FF), argb(130, 0x0C3A6E), argb(200, 0x2F8AE0), argb(200, 0x1B5A9E), false),
++        new ButtonStyle("Retro Green", argb(150, 0x306230), argb(220, 0x8BAC0F), argb(220, 0x0F380F),
++                argb(255, 0x9BBC0F), argb(150, 0x306230), argb(200, 0x0F380F), argb(200, 0x0F380F), false),
++    };
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsLayout.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsLayout.java
+new file mode 100644
+index 000000000..6052292ea
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsLayout.java
+@@ -0,0 +1,135 @@
++package com.pokeemerald.experimental.controls;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Where every on-screen control is, and which GBA keys a touch presses.
++ * Pure Java: no Android types, so it is unit-tested on a plain JVM.
++ */
++public final class ControlsLayout {
++    public enum Shape { DPAD, CIRCLE, PILL }
++
++    public static final class Item {
++        public final String id;
++        public final Shape shape;
++        public final int keys;          // GBA keys pressed (0 for gear/edit buttons)
++        public final String label;
++        public float cx, cy, w, h;      // centre and size in pixels
++
++        Item(String id, Shape shape, int keys, String label) {
++            this.id = id; this.shape = shape; this.keys = keys; this.label = label;
++        }
++        public float radius() { return Math.min(w, h) / 2; }
++    }
++
++    public static final String DPAD = "dpad", GEAR = "gear", DONE = "done", RESET = "reset";
++
++    public final List<Item> items = new ArrayList<>();
++    public final int width, height;
++    public final boolean editing;
++    private final boolean diagonals;
++
++    public ControlsLayout(int width, int height, Settings settings, boolean editing) {
++        this.width = width; this.height = height; this.editing = editing;
++        this.diagonals = settings.diagonals;
++
++        // The side bands left by the game screen; never narrower than 14% of
++        // the width, so a 16:9 phone still has room for thumbs.
++        float side = Math.max((width - height * 3f / 2f) / 2f, width * 0.14f);
++        float u = Math.min(side / 3f, height / 8f) * settings.scale;
++        float pillW = Math.min(side * 0.8f, u * 2.4f), pillH = u * 0.75f;
++        float button = Math.min(side * 0.42f, height / 5.5f) * settings.scale;
++
++        add(DPAD, Shape.DPAD, Keys.DIRECTIONS, null, side * 0.55f, height * 0.70f, u * 3.2f, u * 3.2f);
++        add("l", Shape.PILL, Keys.L, "L", side * 0.5f, height * 0.09f, pillW, pillH);
++        add("select", Shape.PILL, Keys.SELECT, "SELECT", side * 0.5f, height * 0.25f, pillW, pillH * 0.85f);
++        add("r", Shape.PILL, Keys.R, "R", width - side * 0.5f, height * 0.09f, pillW, pillH);
++        add("start", Shape.PILL, Keys.START, "START", width - side * 0.5f, height * 0.25f, pillW, pillH * 0.85f);
++        add("a", Shape.CIRCLE, Keys.A, "A", width - side * 0.28f, height * 0.62f, button, button);
++        add("b", Shape.CIRCLE, Keys.B, "B", width - side * 0.70f, height * 0.80f, button, button);
++        if (settings.arenaButtons) {
++            // Emerald Arena: the ball is L+R held together, which as two
++            // separate shoulder buttons needs two fingers at the top corners.
++            add("ball", Shape.PILL, Keys.L | Keys.R, "BALL", width - side * 0.5f, height * 0.41f, pillW, pillH);
++            // Attack select is L/R; these sit above the D-pad, in thumb reach.
++            add("prev", Shape.CIRCLE, Keys.L, "<", side * 0.30f, height * 0.42f, button * 0.6f, button * 0.6f);
++            add("next", Shape.CIRCLE, Keys.R, ">", side * 0.72f, height * 0.42f, button * 0.6f, button * 0.6f);
++        }
++        float g = Math.max(u * 0.55f, height * 0.045f);
++        if (editing) {
++            add(DONE, Shape.PILL, 0, "DONE", width * 0.44f, g * 0.7f, g * 3.2f, g * 1.2f);
++            add(RESET, Shape.PILL, 0, "RESET", width * 0.56f, g * 0.7f, g * 3.2f, g * 1.2f);
++        } else {
++            // In the left band between SELECT and the attack buttons: the
++            // margin above the game screen is only ~60px at 6x scale, too
++            // little for a button that does not overlap the game's HUD.
++            float gear = Math.min(g, height * 0.075f);
++            add(GEAR, Shape.CIRCLE, 0, "*", side * 0.5f, height * 0.335f, gear, gear);
++        }
++
++        for (Item it : items) {
++            float[] p = settings.positions.get(it.id);
++            if (p != null) { it.cx = p[0] * width; it.cy = p[1] * height; }
++        }
++    }
++
++    private void add(String id, Shape shape, int keys, String label, float cx, float cy, float w, float h) {
++        Item it = new Item(id, shape, keys, label);
++        it.cx = cx; it.cy = cy; it.w = w; it.h = h;
++        items.add(it);
++    }
++
++    public Item find(String id) {
++        for (Item it : items) if (it.id.equals(id)) return it;
++        return null;
++    }
++
++    /** The control under (x, y), with a forgiving margin; null if none. */
++    public Item itemAt(float x, float y) {
++        Item best = null;
++        float bestDist = Float.MAX_VALUE;
++        for (Item it : items) {
++            float dx = x - it.cx, dy = y - it.cy;
++            boolean inside;
++            if (it.shape == Shape.PILL) {
++                inside = Math.abs(dx) <= it.w * 0.6f && Math.abs(dy) <= it.h * 0.75f;
++            } else {
++                float r = it.radius() * (it.shape == Shape.DPAD ? 1.25f : 1.2f);
++                inside = dx * dx + dy * dy <= r * r;
++            }
++            float d = dx * dx + dy * dy;
++            if (inside && d < bestDist) { best = it; bestDist = d; }
++        }
++        return best;
++    }
++
++    /**
++     * Keys for a finger at (x, y) on the D-pad. The whole disc is live, so a
++     * thumb can roll between directions without lifting; the centre is a dead
++     * zone. Diagonal sectors are narrower (30 of every 90 degrees) than
++     * cardinal ones, so a slightly-off push does not press two directions --
++     * which the menus would read as a stray move.
++     */
++    public int dpadKeys(Item dpad, float x, float y) {
++        float dx = x - dpad.cx, dy = y - dpad.cy;
++        float dead = dpad.radius() * 0.22f;
++        if (dx * dx + dy * dy < dead * dead) return 0;
++        double deg = Math.toDegrees(Math.atan2(-dy, dx));   // 0 = right, 90 = up
++        if (deg < 0) deg += 360;
++        double within = deg % 90;                           // 0..90 from the last cardinal
++        int cardinal = (int) Math.round(deg / 90) % 4;      // 0 R, 1 U, 2 L, 3 D
++        int[] dirs = {Keys.RIGHT, Keys.UP, Keys.LEFT, Keys.DOWN};
++        if (diagonals && within >= 30 && within <= 60) {
++            int lower = (int) (deg / 90) % 4;
++            return dirs[lower] | dirs[(lower + 1) % 4];
++        }
++        return dirs[cardinal];
++    }
++
++    /** Keys for a finger that is on item it at (x, y). */
++    public int keysFor(Item it, float x, float y) {
++        if (it == null) return 0;
++        return it.shape == Shape.DPAD ? dpadKeys(it, x, y) : it.keys;
++    }
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
+new file mode 100644
+index 000000000..8cae3858c
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
+@@ -0,0 +1,98 @@
++package com.pokeemerald.experimental.controls;
++
++/** Draws a ControlsLayout through a Painter: the same code on device and in previews. */
++public final class ControlsRenderer {
++    private static final int EDIT_OUTLINE = 0xFFFFD040;
++
++    private ControlsRenderer() {}
++
++    static int fade(int argb, float opacity) {
++        int a = Math.round(((argb >>> 24) & 0xFF) * opacity);
++        return (a << 24) | (argb & 0xFFFFFF);
++    }
++
++    public static void draw(Painter p, ControlsLayout layout, ButtonStyle st, float opacity, int pressed) {
++        for (ControlsLayout.Item it : layout.items) {
++            float o = it.keys == 0 ? Math.max(opacity, 0.6f) : opacity;   // gear/edit stay findable
++            boolean down = it.keys != 0 && (pressed & it.keys) == it.keys
++                    && it.shape != ControlsLayout.Shape.DPAD;
++            switch (it.shape) {
++            case DPAD:   drawDpad(p, it, st, o, pressed & Keys.DIRECTIONS, layout.editing); break;
++            case CIRCLE: drawCircle(p, it, st, o, down, layout.editing); break;
++            case PILL:   drawPill(p, it, st, o, down, layout.editing); break;
++            }
++        }
++        if (layout.editing) {
++            float size = layout.height * 0.035f;
++            p.text("Drag controls to move them", layout.width / 2f, layout.height - size * 1.2f, size, 0xFFFFFFFF);
++        }
++    }
++
++    private static int faceFor(ButtonStyle st, ControlsLayout.Item it, boolean down) {
++        if (down) return st.pressed;
++        if ("a".equals(it.id) && st.accentA != 0) return st.accentA;
++        if ("b".equals(it.id) && st.accentB != 0) return st.accentB;
++        return st.face;
++    }
++
++    private static void drawCircle(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, boolean down, boolean edit) {
++        float r = it.radius();
++        // The gear gets a dark backing: on a light theme with a faint style it
++        // would otherwise be hard to find, and it is the way into settings.
++        if (ControlsLayout.GEAR.equals(it.id)) p.fillCircle(it.cx, it.cy, r, 0x99000000);
++        p.fillCircle(it.cx, it.cy, r, fade(faceFor(st, it, down), o));
++        p.strokeCircle(it.cx, it.cy, r, Math.max(2, r * 0.07f), edit ? EDIT_OUTLINE : fade(st.outline, o));
++        if (ControlsLayout.GEAR.equals(it.id)) {
++            drawGear(p, it.cx, it.cy, r * 0.62f, fade(st.label, o));
++        } else if (it.label != null) {
++            p.text(it.label, it.cx, it.cy, r * 0.95f, fade(st.label, o));
++        }
++    }
++
++    private static void drawGear(Painter p, float cx, float cy, float r, int c) {
++        for (int i = 0; i < 8; i++) {
++            double a = Math.PI / 4 * i;
++            p.fillCircle(cx + (float) Math.cos(a) * r * 0.82f, cy + (float) Math.sin(a) * r * 0.82f, r * 0.24f, c);
++        }
++        p.fillCircle(cx, cy, r * 0.72f, c);
++        p.fillCircle(cx, cy, r * 0.3f, 0x00000000);
++        p.strokeCircle(cx, cy, r * 0.3f, Math.max(1, r * 0.12f), 0x80000000);
++    }
++
++    private static void drawPill(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, boolean down, boolean edit) {
++        float l = it.cx - it.w / 2, t = it.cy - it.h / 2, rr = it.h / 2;
++        p.fillRoundRect(l, t, l + it.w, t + it.h, rr, fade(faceFor(st, it, down), o));
++        p.strokeRoundRect(l, t, l + it.w, t + it.h, rr, Math.max(2, it.h * 0.06f), edit ? EDIT_OUTLINE : fade(st.outline, o));
++        if (it.label != null) {
++            float size = Math.min(it.h * 0.55f, it.w / Math.max(1, it.label.length() * 0.62f));
++            p.text(it.label, it.cx, it.cy, size, fade(st.label, o));
++        }
++    }
++
++    private static void drawDpad(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, int dirs, boolean edit) {
++        float r = it.radius(), arm = r * 0.36f, round = arm * 0.35f;
++        int face = fade(st.dpad, o), outline = edit ? EDIT_OUTLINE : fade(st.outline, o);
++        float stroke = Math.max(2, r * 0.035f);
++        // A faint disc shows the live area: the whole circle tracks the thumb.
++        p.fillCircle(it.cx, it.cy, r * 1.08f, fade(0x22FFFFFF, o));
++        // cross
++        p.fillRoundRect(it.cx - arm, it.cy - r, it.cx + arm, it.cy + r, round, face);
++        p.fillRoundRect(it.cx - r, it.cy - arm, it.cx + r, it.cy + arm, round, face);
++        p.strokeRoundRect(it.cx - arm, it.cy - r, it.cx + arm, it.cy + r, round, stroke, outline);
++        p.strokeRoundRect(it.cx - r, it.cy - arm, it.cx + r, it.cy + arm, round, stroke, outline);
++        p.fillRoundRect(it.cx - arm + stroke, it.cy - arm + stroke, it.cx + arm - stroke, it.cy + arm - stroke, round, face);
++        // pressed arms
++        int lit = fade(st.pressed, o);
++        if ((dirs & Keys.UP) != 0)    p.fillRoundRect(it.cx - arm, it.cy - r, it.cx + arm, it.cy - arm, round, lit);
++        if ((dirs & Keys.DOWN) != 0)  p.fillRoundRect(it.cx - arm, it.cy + arm, it.cx + arm, it.cy + r, round, lit);
++        if ((dirs & Keys.LEFT) != 0)  p.fillRoundRect(it.cx - r, it.cy - arm, it.cx - arm, it.cy + arm, round, lit);
++        if ((dirs & Keys.RIGHT) != 0) p.fillRoundRect(it.cx + arm, it.cy - arm, it.cx + r, it.cy + arm, round, lit);
++        // arrows
++        int c = fade(st.label, o * 0.85f);
++        float a = arm * 0.55f, tip = r * 0.88f, base = r * 0.55f;
++        p.fillTriangle(it.cx, it.cy - tip, it.cx - a, it.cy - base, it.cx + a, it.cy - base, c);
++        p.fillTriangle(it.cx, it.cy + tip, it.cx - a, it.cy + base, it.cx + a, it.cy + base, c);
++        p.fillTriangle(it.cx - tip, it.cy, it.cx - base, it.cy - a, it.cx - base, it.cy + a, c);
++        p.fillTriangle(it.cx + tip, it.cy, it.cx + base, it.cy - a, it.cx + base, it.cy + a, c);
++    }
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java
+new file mode 100644
+index 000000000..3be686700
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java
+@@ -0,0 +1,19 @@
++package com.pokeemerald.experimental.controls;
++
++/** GBA key bits, the same values the game uses for REG_KEYINPUT. */
++public final class Keys {
++    public static final int A = 1 << 0;
++    public static final int B = 1 << 1;
++    public static final int SELECT = 1 << 2;
++    public static final int START = 1 << 3;
++    public static final int RIGHT = 1 << 4;
++    public static final int LEFT = 1 << 5;
++    public static final int UP = 1 << 6;
++    public static final int DOWN = 1 << 7;
++    public static final int R = 1 << 8;
++    public static final int L = 1 << 9;
++    public static final int[] ALL = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
++    public static final int DIRECTIONS = UP | DOWN | LEFT | RIGHT;
++
++    private Keys() {}
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java
+new file mode 100644
+index 000000000..44757f8b9
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java
+@@ -0,0 +1,16 @@
++package com.pokeemerald.experimental.controls;
++
++/**
++ * The few drawing primitives the controls need. Implemented over an Android
++ * Canvas on the device and over Java2D for previews and tests, so both run
++ * exactly the same layout and drawing code. Colours are ARGB ints.
++ */
++public interface Painter {
++    void fillCircle(float cx, float cy, float r, int argb);
++    void strokeCircle(float cx, float cy, float r, float width, int argb);
++    void fillRoundRect(float l, float t, float r, float b, float radius, int argb);
++    void strokeRoundRect(float l, float t, float r, float b, float radius, float width, int argb);
++    void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3, int argb);
++    /** Text centred on (cx, cy). */
++    void text(String s, float cx, float cy, float size, int argb);
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
+new file mode 100644
+index 000000000..293544d64
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
+@@ -0,0 +1,64 @@
++package com.pokeemerald.experimental.controls;
++
++import java.util.HashMap;
++import java.util.Map;
++
++/**
++ * User preferences for the controls, serialised to one string so the Android
++ * side can keep it in SharedPreferences and tests can round-trip it.
++ */
++public final class Settings {
++    public static final int MATCH_THEME = -1;
++
++    public int style = MATCH_THEME;     // ButtonStyle index, or MATCH_THEME
++    public float opacity = 1f;          // 0.2 .. 1, multiplies style alphas
++    public float scale = 1f;            // 0.7 .. 1.5, multiplies control sizes
++    public boolean haptics = true;
++    public boolean arenaButtons = true;
++    public boolean diagonals = true;
++    /** Moved controls: id -> {x, y} as fractions of the view size. */
++    public final Map<String, float[]> positions = new HashMap<>();
++
++    public static float clamp(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
++
++    public String serialize() {
++        StringBuilder s = new StringBuilder();
++        s.append("v=1;style=").append(style).append(";opacity=").append(opacity)
++         .append(";scale=").append(scale).append(";haptics=").append(haptics ? 1 : 0)
++         .append(";arena=").append(arenaButtons ? 1 : 0).append(";diag=").append(diagonals ? 1 : 0);
++        for (Map.Entry<String, float[]> e : positions.entrySet())
++            s.append(";pos.").append(e.getKey()).append('=').append(e.getValue()[0]).append(',').append(e.getValue()[1]);
++        return s.toString();
++    }
++
++    /** Never throws: anything unreadable keeps its default. */
++    public static Settings parse(String text) {
++        Settings s = new Settings();
++        if (text == null) return s;
++        for (String part : text.split(";")) {
++            int eq = part.indexOf('=');
++            if (eq <= 0) continue;
++            String k = part.substring(0, eq), v = part.substring(eq + 1);
++            try {
++                switch (k) {
++                case "style":   s.style = Integer.parseInt(v); break;
++                case "opacity": s.opacity = clamp(Float.parseFloat(v), 0.2f, 1f); break;
++                case "scale":   s.scale = clamp(Float.parseFloat(v), 0.7f, 1.5f); break;
++                case "haptics": s.haptics = !v.equals("0"); break;
++                case "arena":   s.arenaButtons = !v.equals("0"); break;
++                case "diag":    s.diagonals = !v.equals("0"); break;
++                default:
++                    if (k.startsWith("pos.")) {
++                        String[] xy = v.split(",");
++                        s.positions.put(k.substring(4), new float[] {
++                            clamp(Float.parseFloat(xy[0]), 0f, 1f), clamp(Float.parseFloat(xy[1]), 0f, 1f)});
++                    }
++                }
++            } catch (RuntimeException ignored) {
++                // keep the default for this key
++            }
++        }
++        if (s.style < MATCH_THEME || s.style >= ButtonStyle.ALL.length) s.style = MATCH_THEME;
++        return s;
++    }
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
+new file mode 100644
+index 000000000..416aa010d
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
+@@ -0,0 +1,34 @@
++package com.pokeemerald.experimental.controls;
++
++/**
++ * Screen-background themes. background is the game's BACKGROUND number
++ * (BG.png = 0, BGn.png = n); style is the button style that suits it.
++ * BG2.png onward come from android-build/themes/make_themes.py, in this order.
++ */
++public final class Themes {
++    public final String name;
++    public final int background, style;
++
++    private Themes(String name, int background, int style) {
++        this.name = name; this.background = background; this.style = style;
++    }
++
++    public static final Themes[] ALL = {
++        new Themes("Starfall", 0, 0),
++        new Themes("Open Sea", 1, 6),
++        new Themes("Rayquaza Sky", 2, 4),
++        new Themes("Hoenn Sunset", 3, 6),
++        new Themes("Magma", 4, 5),
++        new Themes("Starter Meadow", 5, 4),
++        new Themes("Eon Night", 6, 1),
++        new Themes("GBA Indigo", 7, 1),
++        new Themes("Classic Green", 8, 7),
++    };
++
++    /** The theme whose background is the given BACKGROUND number, or -1 (custom/off). */
++    public static int forBackground(int background) {
++        for (int i = 0; i < ALL.length; i++)
++            if (ALL[i].background == background) return i;
++        return -1;
++    }
++}
+diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
+index b991f1d93..21c027454 100644
+--- a/src/platform/sdl2.c
++++ b/src/platform/sdl2.c
+@@ -901,6 +901,14 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
+     return Platform_GetBorderBackground();
+ }
+ 
++// The touch overlay's theme picker. 0..count-1 are BG.png/BGn.png and count
++// is BACKGROUND OFF, the same range the game's own options menu cycles.
++JNIEXPORT void JNICALL Java_com_pokeemerald_experimental_GbaControlsView_setBorderBackground(JNIEnv *env, jclass clazz, jint background)
++{
++    if (background >= 0 && background <= sBorderBackgroundCount)
++        Platform_SetBorderBackground(background);
++}
++
+ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getPlatformSetting(JNIEnv *env, jclass clazz, jint setting)
+ {
+     if (setting < 0 || setting >= PLATFORM_SETTING_COUNT)

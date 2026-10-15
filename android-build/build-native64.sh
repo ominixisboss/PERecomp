@@ -22,7 +22,7 @@ log() { printf '\n==> %s\n' "$*"; }
 cd "$WORK_DIR"
 
 log "Applying arm64 port patches"
-for patch in "$SCRIPT_DIR"/patches/0001-*.patch; do
+for patch in "$SCRIPT_DIR"/patches/*.patch; do
     [ -e "$patch" ] || continue
     if git apply -R --check "$patch" 2>/dev/null; then
         echo "  $(basename "$patch") already applied"
@@ -36,6 +36,9 @@ make -j"$(nproc)" tools >/dev/null
 
 log "Adding Emerald Arena (real-time battles)"
 "$SCRIPT_DIR/emerald-arena.sh"
+
+log "Generating the extra screen-background themes"
+python3 "$SCRIPT_DIR/themes/make_themes.py" .
 make -j"$(nproc)" generated >/dev/null
 
 log "Generating binary assets"
@@ -63,6 +66,16 @@ make -f Makefile_pc NATIVE_LINUX=1 BITS=64 PIE=1 -j"$(nproc)" 2>&1 | tee build64
 # the compiler reports each one. These are being fixed in reviewable pieces
 # rather than one sweep, so the check is a ratchet: the count may fall, and
 # lowering the baseline is part of landing a piece, but it may never rise.
+# The touch overlay's layout, D-pad maths, settings and drawing are plain Java
+# (no Android types), so they are tested here even though the overlay itself
+# only runs on a phone.
+log "Testing the touch controls"
+if command -v javac >/dev/null; then
+    "$SCRIPT_DIR/controls-tests/run.sh" "$PWD"
+else
+    echo "javac not found -- skipping controls tests"
+fi
+
 log "Checking for pointer truncation"
 BASELINE=$(cat "$SCRIPT_DIR/truncation-baseline.txt")
 # `|| true` matters: with `set -o pipefail` a grep that matches nothing exits

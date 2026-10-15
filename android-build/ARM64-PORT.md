@@ -730,3 +730,28 @@ Verified on the 64-bit PIE build: 12 arena fuzz seeds (quick start, L+R, then
 random play with L/R and B+direction) at ~129,000 frames each, and 4 story
 seeds with random wild battles (22-32 each), all without a crash. Screenshots
 show real-time arena battles, effects, breakable props, EXP and capture.
+
+## Touch controls and themes (patches/0003)
+
+The overlay was rewritten. Its logic -- layout, D-pad maths, settings, drawing
+-- is plain Java in `controls/` with no Android types, drawn through a small
+`Painter` interface: a `Canvas` on the phone, Java2D in
+`android-build/controls-tests/`, which unit-tests it on every CI run and can
+render the exact overlay to a PNG (`Preview`). `GbaControlsView` is only the
+Android glue: touches, haptics, persistence and the settings dialog.
+
+- **D-pad:** one disc. The whole disc is live and a thumb that went down on it
+  keeps steering after sliding off; the centre is a dead zone; diagonal
+  sectors are 30 of every 90 degrees so near-cardinal pushes stay single.
+- **Arena buttons:** BALL presses L+R at once (Emerald Arena's ball aim); < and
+  > are L and R placed by the left thumb, for attack select.
+- **Gear** (left band, under SELECT) opens settings: theme, button style
+  (8, or "match theme"), size 70-150%, opacity 20-100%, vibration, arena
+  buttons, diagonals, and a drag-to-move layout editor with reset. Settings
+  persist in SharedPreferences as one string (`Settings.serialize`).
+- **Themes:** BG2-BG8.png are generated at build time by
+  `themes/make_themes.py` from the game's own sprites and title-screen art, so
+  no outside artwork is involved. The theme picker sets the game's BACKGROUND
+  option through a new JNI setter, so the in-game options menu stays in sync.
+  Backgrounds are now cover-scaled (the old code stretched 16:9 art over 20:9
+  phones) and only the one in use is decoded.
