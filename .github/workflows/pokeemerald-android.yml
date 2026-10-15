@@ -65,11 +65,39 @@ jobs:
                                "ndk;${NDK_VERSION}" \
                                "cmake;${SDK_CMAKE_VERSION}"
 
+      # The permanent signing key (android-build/SIGNING.md). Same key on every
+      # build is what lets a new APK install over the old one and keep the
+      # save; a missing key falls back to a throwaway one, loudly.
+      - name: Restore the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/pokeemerald.keystore"
+            echo "POKEEMERALD_KEYSTORE=$RUNNER_TEMP/pokeemerald.keystore" >> "$GITHUB_ENV"
+            echo "Signing with the permanent key."
+          else
+            echo "::warning title=No signing key::ANDROID_KEYSTORE_BASE64 is not set, so this APK is signed with a throwaway key and will not install over a previous build without uninstalling (which deletes the save). See android-build/SIGNING.md."
+          fi
+
       - name: Build APK
         run: ./android-build/build-android.sh
         env:
           REPO_REF: ${{ github.event.inputs.ref || 'master' }}
           POKEEMERALD_ABI: ${{ matrix.abi }}
+          POKEEMERALD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
+      - name: Show the signing certificate
+        run: |
+          apk=.pokeemerald-multiplatform/android/app/build/outputs/apk/debug/app-debug.apk
+          signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$signer" verify --print-certs "$apk" | grep -E "SHA-256|DN" | tee cert.txt
+          # The permanent key's fingerprint (android-build/SIGNING.md).
+          if grep -qi "540da3c019869c153a3baa72880e46d05232a82deb36f6107d7dac5fc55aa4ad" cert.txt; then
+            echo "Permanent key: builds will install over each other."
+          else
+            echo "::warning::Not the permanent key -- this build will not update an install signed with it."
+          fi
 
       # NO_MATCHING_ABIS is an install-time failure with no build-time symptom:
       # the APK builds fine, it just carries native libraries for an ABI the
@@ -254,8 +282,13 @@ jobs:
             save press **SELECT** on NEW GAME, then **L+R** in the field.
             Pokemon sprites: PMDCollab SpriteCollab (see the mod's CREDITS.md).
 
+            **Saves:** builds signed with the permanent key install over each
+            other and keep your save. The app also copies the save to
+            Downloads/PokemonEmerald whenever you leave it, and the gear panel can
+            back up or restore a save file.
+
             **Controls & themes:** tap the gear (left side, under SELECT) to pick
-            one of 9 screen themes and 8 button styles, change button size and
+            one of 9 screen themes or 8 animated handheld shells, 16 button styles, change button size and
             opacity, toggle vibration, arena buttons and diagonals, or drag the
             buttons wherever you like. The D-pad is one disc you can roll your
             thumb around; **BALL** is L+R in one tap; **< >** switch attacks.

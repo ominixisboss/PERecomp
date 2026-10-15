@@ -755,3 +755,40 @@ Android glue: touches, haptics, persistence and the settings dialog.
   option through a new JNI setter, so the in-game options menu stays in sync.
   Backgrounds are now cover-scaled (the old code stretched 16:9 art over 20:9
   phones) and only the one in use is decoded.
+
+## Saves across new builds
+
+New builds would not install over old ones: every CI run signed with a fresh
+throwaway debug key, and Android only updates an app signed with the same key,
+so the only way in was an uninstall -- which deletes the save. Now:
+
+- **One permanent signing key** from repository secrets
+  (`android-build/SIGNING.md`); every APK's certificate is printed and checked
+  against its fingerprint in CI. `versionCode` is the workflow run number, so
+  each build is an upgrade of the last.
+- **Saves are flushed and fsync'd** after every write. The game wrote through
+  a held `FILE*` and never flushed; Android ends apps by killing the process,
+  so the tail of a save could sit unwritten in stdio's buffer.
+- **Backups** (`SaveTransfer`): on every pause the save is copied to
+  `Downloads/PokemonEmerald/` (Android 10+), which survives an uninstall, and
+  the gear panel has **Back up save** / **Restore save** through the system
+  file picker. Restore keeps the previous save as `pokeemerald.sav.bak` and
+  restarts the game so the old save in memory cannot be written back over it.
+
+## Handheld themes
+
+Eight handheld shells (Indigo, Glacier, Fuchsia, Arctic, Black, Spice,
+Platinum, Emerald), drawn live around the game rather than as images, so the
+screen bezel always fits the game whatever the phone's shape: moulded plastic,
+bezel, power LED, speaker grille, screws; domed A/B with the letters printed
+on the shell, rubber START/SELECT, shoulder L/R, and a black cross pad in a
+round well. No logos or wordmarks.
+
+They animate (`ControlsAnimator`): each button rides a damped spring -- stiff
+and critically damped going down, underdamped coming back up so it overshoots
+and settles -- and the cross pad pivots on its centre: the pressed arm sinks
+(foreshortened, darker), the opposite arm rises, the cross slides toward the
+press and its shadow shifts; a diagonal sinks two arms halfway. Tests pin the
+timing (down within 80ms, bounce on release, settled within 400ms, stable
+across a long frame gap) and that the shell never paints a pixel inside the
+game rectangle -- which caught the bezel's rounded corners doing exactly that.

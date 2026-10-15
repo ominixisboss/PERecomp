@@ -1,12 +1,63 @@
+diff --git a/android/app/build.gradle b/android/app/build.gradle
+index 8f443203c..05910f96e 100644
+--- a/android/app/build.gradle
++++ b/android/app/build.gradle
+@@ -11,7 +11,10 @@ android {
+         applicationId 'com.pokeemerald.experimental'
+         minSdk 21
+         targetSdk 36
+-        versionCode 2
++        // Every CI build must be an upgrade of the last, or Android will not
++        // install it over the existing app. The workflow run number only
++        // ever goes up; local builds stay at 2.
++        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '2') as int)
+         versionName '0.2-experimental'
+ 
+         ndk {
+@@ -27,6 +30,31 @@ android {
+         }
+     }
+ 
++    // One permanent key for every build. Android only installs an update
++    // signed with the same key as the installed app; without this each CI
++    // run signed with a fresh throwaway debug key, so installing a new build
++    // meant uninstalling first -- which deletes the save. The key comes from
++    // repository secrets (see android-build/SIGNING.md); without them the
++    // build falls back to the throwaway debug key, as before.
++    def stableKeystore = System.getenv('POKEEMERALD_KEYSTORE')
++    signingConfigs {
++        stable {
++            if (stableKeystore) {
++                storeFile file(stableKeystore)
++                storePassword System.getenv('POKEEMERALD_KEYSTORE_PASSWORD')
++                keyAlias 'pokeemerald'
++                keyPassword System.getenv('POKEEMERALD_KEYSTORE_PASSWORD')
++            }
++        }
++    }
++    buildTypes {
++        debug {
++            if (stableKeystore) {
++                signingConfig signingConfigs.stable
++            }
++        }
++    }
++
+     externalNativeBuild {
+         cmake {
+             path file('src/main/cpp/CMakeLists.txt')
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
 new file mode 100644
-index 000000000..0d0a9ee40
+index 000000000..2100dd71c
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,69 @@
 +package com.pokeemerald.experimental;
 +
 +import android.graphics.Canvas;
++import android.graphics.LinearGradient;
++import android.graphics.RadialGradient;
++import android.graphics.Shader;
 +import android.graphics.Paint;
 +import android.graphics.Path;
 +import android.graphics.RectF;
@@ -49,6 +100,21 @@ index 000000000..0d0a9ee40
 +        fill.setColor(argb); path.reset(); path.moveTo(x1, y1); path.lineTo(x2, y2); path.lineTo(x3, y3);
 +        path.close(); canvas.drawPath(path, fill);
 +    }
++    @Override public void fillPolygon(float[] xy, int argb) {
++        fill.setColor(argb); path.reset(); path.moveTo(xy[0], xy[1]);
++        for (int i = 2; i < xy.length; i += 2) path.lineTo(xy[i], xy[i + 1]);
++        path.close(); canvas.drawPath(path, fill);
++    }
++    @Override public void fillRectGradient(float l, float t, float r, float b, int top, int bottom, float g0, float g1) {
++        fill.setShader(new LinearGradient(0, g0, 0, g1, top, bottom, Shader.TileMode.CLAMP));
++        canvas.drawRect(l, t, r, b, fill);
++        fill.setShader(null);
++    }
++    @Override public void fillCircleRadial(float cx, float cy, float r, float fx, float fy, int inner, int outer) {
++        fill.setShader(new RadialGradient(fx, fy, Math.max(1, r), inner, outer, Shader.TileMode.CLAMP));
++        canvas.drawCircle(cx, cy, r, fill);
++        fill.setShader(null);
++    }
 +    @Override public void text(String s, float cx, float cy, float size, int argb) {
 +        text.setColor(argb); text.setTextSize(size);
 +        Paint.FontMetrics m = text.getFontMetrics();
@@ -57,10 +123,10 @@ index 000000000..0d0a9ee40
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
 new file mode 100644
-index 000000000..e7835b9ee
+index 000000000..f37a219e5
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,207 @@
 +package com.pokeemerald.experimental;
 +
 +import android.app.AlertDialog;
@@ -103,12 +169,16 @@ index 000000000..e7835b9ee
 +        final List<Themes> themes = new ArrayList<>();
 +        List<String> themeNames = new ArrayList<>();
 +        for (Themes t : Themes.ALL) {
-+            if (GbaControlsView.backgroundExists(c, t.background)) { themes.add(t); themeNames.add(t.name); }
++            if (t.isShell() || GbaControlsView.backgroundExists(c, t.background)) { themes.add(t); themeNames.add(t.name); }
 +        }
 +        themeNames.add("None (black)");
 +        Spinner theme = spinner(c, themeNames);
 +        int current = GbaControlsView.getBorderBackground(), selected = themes.size();
-+        for (int i = 0; i < themes.size(); i++) if (themes.get(i).background == current) selected = i;
++        for (int i = 0; i < themes.size(); i++) {
++            Themes t = themes.get(i);
++            boolean on = view.shellActive() ? t == Themes.ALL[s.shellTheme] : (!t.isShell() && t.background == current);
++            if (on) selected = i;
++        }
 +        theme.setSelection(selected, false);
 +        header(col, c, "Theme");
 +        col.addView(theme);
@@ -145,10 +215,27 @@ index 000000000..e7835b9ee
 +        row.addView(reset, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 +        col.addView(row);
 +
++        // Save transfer (SaveTransfer): survive reinstalls and move saves around.
++        header(col, c, "Save");
++        TextView saveNote = new TextView(c);
++        saveNote.setText(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
++                ? "A copy is kept automatically in Downloads/PokemonEmerald whenever you leave the game."
++                : "Use Back up to keep a copy outside the app.");
++        col.addView(saveNote);
++        LinearLayout saveRow = new LinearLayout(c);
++        saveRow.setOrientation(LinearLayout.HORIZONTAL);
++        Button export = new Button(c);
++        export.setText("Back up save");
++        Button restore = new Button(c);
++        restore.setText("Restore save");
++        saveRow.addView(export, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
++        saveRow.addView(restore, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
++        col.addView(saveRow);
++
 +        ScrollView scroll = new ScrollView(c);
 +        scroll.addView(col);
 +        final AlertDialog dialog = new AlertDialog.Builder(c, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-+                .setTitle("Controls & themes")
++                .setTitle("Controls, themes & saves")
 +                .setView(scroll)
 +                .setPositiveButton("Done", null)
 +                .create();
@@ -156,9 +243,11 @@ index 000000000..e7835b9ee
 +        // Every change applies immediately, so the result is visible behind the panel.
 +        theme.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
 +            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-+                // "None" is the game's BACKGROUND OFF: one past the last image.
-+                int bg = pos < themes.size() ? themes.get(pos).background : countBackgrounds(c);
-+                GbaControlsView.setBorderBackground(bg);
++                // "None" and the handheld shells are the game's BACKGROUND OFF
++                // (one past the last image); a shell is then drawn by the overlay.
++                Themes t = pos < themes.size() ? themes.get(pos) : null;
++                s.shellTheme = t != null && t.isShell() ? java.util.Arrays.asList(Themes.ALL).indexOf(t) : -1;
++                GbaControlsView.setBorderBackground(t != null && !t.isShell() ? t.background : view.backgroundOff());
 +                view.settingsChanged();
 +            }
 +            @Override public void onNothingSelected(AdapterView<?> p) {}
@@ -193,15 +282,16 @@ index 000000000..e7835b9ee
 +        diag.setOnCheckedChangeListener(toggles);
 +        edit.setOnClickListener(v -> { dialog.dismiss(); view.startEditing(); });
 +        reset.setOnClickListener(v -> { s.positions.clear(); view.settingsChanged(); });
++        export.setOnClickListener(v -> {
++            dialog.dismiss();
++            if (c instanceof android.app.Activity) SaveTransfer.requestExport((android.app.Activity) c);
++        });
++        restore.setOnClickListener(v -> {
++            dialog.dismiss();
++            if (c instanceof android.app.Activity) SaveTransfer.requestImport((android.app.Activity) c);
++        });
 +
 +        dialog.show();
-+    }
-+
-+    /** BG.png plus however many BGn.png follow it -- the game counts them the same way. */
-+    private static int countBackgrounds(Context c) {
-+        int n = 0;
-+        while (n < 15 && GbaControlsView.backgroundExists(c, n)) n++;
-+        return n;
 +    }
 +
 +    private abstract static class Seek implements SeekBar.OnSeekBarChangeListener {
@@ -245,10 +335,10 @@ index 000000000..e7835b9ee
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-index 7f1cea0b5..8fb864aa8 100644
+index 7f1cea0b5..e6c97b814 100644
 --- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-@@ -1,188 +1,276 @@
+@@ -1,188 +1,294 @@
  package com.pokeemerald.experimental;
  
  import android.content.Context;
@@ -274,6 +364,7 @@ index 7f1cea0b5..8fb864aa8 100644
  import org.libsdl.app.SDLActivity;
  
 +import com.pokeemerald.experimental.controls.ButtonStyle;
++import com.pokeemerald.experimental.controls.ControlsAnimator;
 +import com.pokeemerald.experimental.controls.ControlsLayout;
 +import com.pokeemerald.experimental.controls.ControlsRenderer;
 +import com.pokeemerald.experimental.controls.Keys;
@@ -315,6 +406,8 @@ index 7f1cea0b5..8fb864aa8 100644
 -    private final Bitmap[] backgrounds = new Bitmap[15];
 -    private int backgroundCount;
 -    private Bitmap border;
++    private final ControlsAnimator animator = new ControlsAnimator();
++    private final int backgroundCount;
 +    private final SharedPreferences prefs;
 +    private Settings settings;
 +    private ControlsLayout layout;
@@ -348,6 +441,9 @@ index 7f1cea0b5..8fb864aa8 100644
 -            border = BitmapFactory.decodeStream(context.getAssets().open("Border.png"));
 +        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        settings = Settings.parse(prefs.getString(KEY, null));
++        int n = 0;
++        while (n < 15 && backgroundExists(context, n)) n++;
++        backgroundCount = n;
 +        try (InputStream in = context.getAssets().open("Border.png")) {
 +            border = BitmapFactory.decodeStream(in);
          } catch (IOException ignored) {
@@ -363,20 +459,14 @@ index 7f1cea0b5..8fb864aa8 100644
 +    void settingsChanged() {
 +        prefs.edit().putString(KEY, settings.serialize()).apply();
 +        rebuildLayout();
-+    }
-+
-+    void startEditing() {
-+        releaseAll();
-+        editing = true;
-+        rebuildLayout();
      }
  
 -    private int unit() {
 -        return Math.min(sideWidth() / 3, getHeight() / 8);
-+    private void rebuildLayout() {
-+        if (getWidth() > 0 && getHeight() > 0)
-+            layout = new ControlsLayout(getWidth(), getHeight(), settings, editing);
-+        invalidate();
++    void startEditing() {
++        releaseAll();
++        editing = true;
++        rebuildLayout();
      }
  
 -    private RectF controlRect(int control) {
@@ -385,14 +475,42 @@ index 7f1cea0b5..8fb864aa8 100644
 -        int padX = side * 2 / 3;
 -        int padY = getHeight() * 7 / 10;
 -        int button = Math.min(side * 2 / 5, getHeight() / 6);
++    private void rebuildLayout() {
++        if (getWidth() > 0 && getHeight() > 0)
++            layout = new ControlsLayout(getWidth(), getHeight(), settings, editing);
++        invalidate();
++    }
+ 
+-        switch (control) {
+-        case UP:     return new RectF(padX - pad / 2f, padY - pad * 1.5f, padX + pad / 2f, padY - pad / 2f);
+-        case DOWN:   return new RectF(padX - pad / 2f, padY + pad / 2f, padX + pad / 2f, padY + pad * 1.5f);
+-        case LEFT:   return new RectF(padX - pad * 1.5f, padY - pad / 2f, padX - pad / 2f, padY + pad / 2f);
+-        case RIGHT:  return new RectF(padX + pad / 2f, padY - pad / 2f, padX + pad * 1.5f, padY + pad / 2f);
+-        case A:      return new RectF(getWidth() - side / 4f - button, getHeight() * .58f,
+-                                      getWidth() - side / 4f, getHeight() * .58f + button);
+-        case B:      return new RectF(getWidth() - side + side / 4f, getHeight() * .76f,
+-                                      getWidth() - side + side / 4f + button, getHeight() * .76f + button);
+-        case SELECT: return new RectF(side / 10f, getHeight() * .25f, side * .9f, getHeight() * .35f);
+-        case START:  return new RectF(getWidth() - side * .9f, getHeight() * .25f,
+-                                      getWidth() - side * .1f, getHeight() * .35f);
+-        case L:      return new RectF(side / 10f, getHeight() * .05f, side * .9f, getHeight() * .15f);
+-        case R:      return new RectF(getWidth() - side * .9f, getHeight() * .05f,
+-                                      getWidth() - side * .1f, getHeight() * .15f);
+-        default:     return new RectF();
 +    static boolean backgroundExists(Context c, int index) {
 +        try (InputStream in = c.getAssets().open(index == 0 ? "BG.png" : "BG" + index + ".png")) {
 +            return true;
 +        } catch (IOException e) {
 +            return false;
-+        }
-+    }
-+
+         }
+     }
+ 
+-    private int controlsAt(float x, float y) {
+-        int result = 0;
+-        int[] controls = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
+-        for (int control : controls) {
+-            if (controlRect(control).contains(x, y)) {
+-                result |= control;
 +    // ---- touch ------------------------------------------------------------
 +
 +    @Override
@@ -416,7 +534,7 @@ index 7f1cea0b5..8fb864aa8 100644
 +            if (editing && it != null) {
 +                f.grabX = it.cx - event.getX(index);
 +                f.grabY = it.cy - event.getY(index);
-+            }
+             }
 +            fingers.put(id, f);
 +        }
 +
@@ -424,24 +542,9 @@ index 7f1cea0b5..8fb864aa8 100644
 +            onEditTouch(event, up ? id : -1);
 +        } else {
 +            onPlayTouch(event, up ? index : -1);
-+        }
- 
--        switch (control) {
--        case UP:     return new RectF(padX - pad / 2f, padY - pad * 1.5f, padX + pad / 2f, padY - pad / 2f);
--        case DOWN:   return new RectF(padX - pad / 2f, padY + pad / 2f, padX + pad / 2f, padY + pad * 1.5f);
--        case LEFT:   return new RectF(padX - pad * 1.5f, padY - pad / 2f, padX - pad / 2f, padY + pad / 2f);
--        case RIGHT:  return new RectF(padX + pad / 2f, padY - pad / 2f, padX + pad * 1.5f, padY + pad / 2f);
--        case A:      return new RectF(getWidth() - side / 4f - button, getHeight() * .58f,
--                                      getWidth() - side / 4f, getHeight() * .58f + button);
--        case B:      return new RectF(getWidth() - side + side / 4f, getHeight() * .76f,
--                                      getWidth() - side + side / 4f + button, getHeight() * .76f + button);
--        case SELECT: return new RectF(side / 10f, getHeight() * .25f, side * .9f, getHeight() * .35f);
--        case START:  return new RectF(getWidth() - side * .9f, getHeight() * .25f,
--                                      getWidth() - side * .1f, getHeight() * .35f);
--        case L:      return new RectF(side / 10f, getHeight() * .05f, side * .9f, getHeight() * .15f);
--        case R:      return new RectF(getWidth() - side * .9f, getHeight() * .05f,
--                                      getWidth() - side * .1f, getHeight() * .15f);
--        default:     return new RectF();
+         }
+-        return result;
++
 +        if (up) {
 +            Finger f = fingers.get(id);
 +            fingers.remove(id);
@@ -450,16 +553,23 @@ index 7f1cea0b5..8fb864aa8 100644
 +                if (gear != null && layout.itemAt(event.getX(index), event.getY(index)) == gear)
 +                    ControlsSettingsDialog.show(this);
 +            }
-         }
++        }
 +        return true;
      }
  
--    private int controlsAt(float x, float y) {
--        int result = 0;
--        int[] controls = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
--        for (int control : controls) {
--            if (controlRect(control).contains(x, y)) {
--                result |= control;
+-    private int keyCode(int control) {
+-        switch (control) {
+-        case A:      return KeyEvent.KEYCODE_Z;
+-        case B:      return KeyEvent.KEYCODE_X;
+-        case SELECT: return KeyEvent.KEYCODE_BACKSLASH;
+-        case START:  return KeyEvent.KEYCODE_ENTER;
+-        case RIGHT:  return KeyEvent.KEYCODE_DPAD_RIGHT;
+-        case LEFT:   return KeyEvent.KEYCODE_DPAD_LEFT;
+-        case UP:     return KeyEvent.KEYCODE_DPAD_UP;
+-        case DOWN:   return KeyEvent.KEYCODE_DPAD_DOWN;
+-        case R:      return KeyEvent.KEYCODE_S;
+-        case L:      return KeyEvent.KEYCODE_A;
+-        default:     return KeyEvent.KEYCODE_UNKNOWN;
 +    private void onPlayTouch(MotionEvent event, int releasedIndex) {
 +        int next = 0;
 +        for (int i = 0; i < event.getPointerCount(); i++) {
@@ -476,25 +586,11 @@ index 7f1cea0b5..8fb864aa8 100644
 +                // finger that went down there steers it.
 +                if (it != null && it.shape != ControlsLayout.Shape.DPAD)
 +                    next |= it.keys;
-             }
++            }
          }
--        return result;
 +        setPressed(next);
-     }
- 
--    private int keyCode(int control) {
--        switch (control) {
--        case A:      return KeyEvent.KEYCODE_Z;
--        case B:      return KeyEvent.KEYCODE_X;
--        case SELECT: return KeyEvent.KEYCODE_BACKSLASH;
--        case START:  return KeyEvent.KEYCODE_ENTER;
--        case RIGHT:  return KeyEvent.KEYCODE_DPAD_RIGHT;
--        case LEFT:   return KeyEvent.KEYCODE_DPAD_LEFT;
--        case UP:     return KeyEvent.KEYCODE_DPAD_UP;
--        case DOWN:   return KeyEvent.KEYCODE_DPAD_DOWN;
--        case R:      return KeyEvent.KEYCODE_S;
--        case L:      return KeyEvent.KEYCODE_A;
--        default:     return KeyEvent.KEYCODE_UNKNOWN;
++    }
++
 +    private void onEditTouch(MotionEvent event, int upId) {
 +        for (int i = 0; i < event.getPointerCount(); i++) {
 +            int id = event.getPointerId(i);
@@ -520,7 +616,7 @@ index 7f1cea0b5..8fb864aa8 100644
 +            float y = Settings.clamp(event.getY(i) + f.grabY, it.h / 2, getHeight() - it.h / 2);
 +            it.cx = x; it.cy = y;
 +            settings.positions.put(it.id, new float[] {x / getWidth(), y / getHeight()});
-         }
++        }
 +        invalidate();
 +    }
 +
@@ -585,14 +681,25 @@ index 7f1cea0b5..8fb864aa8 100644
 -        for (int i = 0; i < event.getPointerCount(); i++) {
 -            if (i != releasedPointer) {
 -                next |= controlsAt(event.getX(i), event.getY(i));
--            }
 +    // ---- drawing ----------------------------------------------------------
++
++    /** BACKGROUND OFF in the game's numbering: one past the last image. */
++    int backgroundOff() { return backgroundCount; }
++
++    /** A handheld shell is shown when one is chosen and the game's own background is off. */
++    boolean shellActive() {
++        return settings.shellTheme >= 0 && getBorderBackground() >= backgroundCount;
++    }
 +
 +    ButtonStyle currentStyle() {
 +        int style = settings.style;
 +        if (style == Settings.MATCH_THEME) {
-+            int theme = Themes.forBackground(getBorderBackground());
-+            style = theme < 0 ? 0 : Themes.ALL[theme].style;
++            if (shellActive()) {
++                style = Themes.ALL[settings.shellTheme].style;
++            } else {
++                int theme = Themes.forBackground(getBorderBackground());
++                style = theme < 0 ? 0 : Themes.ALL[theme].style;
+             }
          }
 -        setPressed(next);
 -        return true;
@@ -649,7 +756,7 @@ index 7f1cea0b5..8fb864aa8 100644
              Rect[] regions = {
                      new Rect(0, 0, getWidth(), gameY),
                      new Rect(0, gameY + gameHeight, getWidth(), getHeight()),
-@@ -192,46 +280,42 @@ public final class GbaControlsView extends View {
+@@ -192,46 +298,55 @@ public final class GbaControlsView extends View {
              for (Rect region : regions) {
                  int state = canvas.save();
                  canvas.clipRect(region);
@@ -696,8 +803,21 @@ index 7f1cea0b5..8fb864aa8 100644
 -        drawControl(canvas, START, "START");
 -        drawControl(canvas, L, "L");
 -        drawControl(canvas, R, "R");
-+        if (layout != null)
-+            ControlsRenderer.draw(painter.on(canvas), layout, currentStyle(), settings.opacity, pressed);
++        boolean animating = false;
++        if (layout != null) {
++            ButtonStyle st = currentStyle();
++            // Hardware skins animate: presses travel and the pad pivots.
++            if (st.gba) {
++                animator.step(layout, pressed, System.nanoTime());
++                animating = animator.animating();
++            }
++            ControlsRenderer.draw(painter.on(canvas), layout, st, settings.opacity, pressed,
++                    st.gba ? animator : null, st.gba && shellActive());
++        }
++        if (animating) {
++            postInvalidateOnAnimation();
++            return;
++        }
 +        // The background can be changed from the game's own options menu, so
 +        // keep redrawing at a low rate rather than only on touches.
 +        if (getBorderBackground() != backgroundLoaded) invalidate();
@@ -711,12 +831,241 @@ index 7f1cea0b5..8fb864aa8 100644
          if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
              setSystemGestureExclusionRects(Arrays.asList(
                      new Rect(0, height / 2, width / 5, height),
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/PokeEmeraldActivity.java b/android/app/src/main/java/com/pokeemerald/experimental/PokeEmeraldActivity.java
+index 642e917f3..3d95edd74 100644
+--- a/android/app/src/main/java/com/pokeemerald/experimental/PokeEmeraldActivity.java
++++ b/android/app/src/main/java/com/pokeemerald/experimental/PokeEmeraldActivity.java
+@@ -1,5 +1,6 @@
+ package com.pokeemerald.experimental;
+ 
++import android.content.Intent;
+ import android.graphics.Rect;
+ import android.os.Bundle;
+ import android.os.Build;
+@@ -20,6 +21,19 @@ public class PokeEmeraldActivity extends SDLActivity {
+                 ViewGroup.LayoutParams.MATCH_PARENT));
+     }
+ 
++    @Override
++    protected void onPause() {
++        // Copy the save somewhere that outlives an uninstall (SaveTransfer).
++        SaveTransfer.autoBackup(this);
++        super.onPause();
++    }
++
++    @Override
++    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
++        if (!SaveTransfer.onActivityResult(this, requestCode, resultCode, data))
++            super.onActivityResult(requestCode, resultCode, data);
++    }
++
+     @Override
+     public void setOrientationBis(int width, int height, boolean resizable, String hint) {
+         // The manifest already keeps this activity in sensor landscape mode.
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/SaveTransfer.java b/android/app/src/main/java/com/pokeemerald/experimental/SaveTransfer.java
+new file mode 100644
+index 000000000..690d37e72
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/SaveTransfer.java
+@@ -0,0 +1,192 @@
++package com.pokeemerald.experimental;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.ContentResolver;
++import android.content.ContentValues;
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.os.Build;
++import android.os.Environment;
++import android.provider.MediaStore;
++import android.widget.Toast;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++
++/**
++ * Keeps the save safe across reinstalls.
++ *
++ * The game's save lives in the app's private storage (SDL_GetPrefPath on
++ * Android is getFilesDir()), which survives an update but is deleted on
++ * uninstall. So:
++ *  - on every pause, a copy goes to Downloads/PokemonEmerald/ (Android 10+,
++ *    no permission needed), which outlives an uninstall;
++ *  - "Back up save" and "Restore save" in the settings panel move a save
++ *    through the system file picker, for any version and any folder.
++ */
++final class SaveTransfer {
++    static final int REQUEST_EXPORT = 7101, REQUEST_IMPORT = 7102;
++    private static final String SAVE = "pokeemerald.sav";
++    private static final String BACKUP_NAME = "pokeemerald-backup.sav";
++    private static final String FOLDER = Environment.DIRECTORY_DOWNLOADS + "/PokemonEmerald";
++    // A real save is the 128KB (GBA) or 136KB (64-bit build) flash image.
++    private static final long MIN_SIZE = 64 * 1024, MAX_SIZE = 256 * 1024;
++
++    private SaveTransfer() {}
++
++    static File saveFile(Context c) {
++        return new File(c.getFilesDir(), SAVE);
++    }
++
++    /** True if the file holds anything but erased flash (all 0xFF). */
++    private static boolean hasData(File f) {
++        if (!f.isFile() || f.length() < MIN_SIZE) return false;
++        byte[] buf = new byte[8192];
++        try (InputStream in = new FileInputStream(f)) {
++            int n;
++            while ((n = in.read(buf)) > 0)
++                for (int i = 0; i < n; i++) if (buf[i] != (byte) 0xFF) return true;
++        } catch (IOException ignored) {
++        }
++        return false;
++    }
++
++    private static void copy(InputStream in, OutputStream out) throws IOException {
++        byte[] buf = new byte[16384];
++        int n;
++        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
++    }
++
++    /** Called from onPause. Cheap when nothing changed since the last copy. */
++    static void autoBackup(Context c) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
++        File save = saveFile(c);
++        if (!hasData(save)) return;
++        SharedPreferences prefs = c.getSharedPreferences("saves", Context.MODE_PRIVATE);
++        long stamp = save.lastModified() ^ save.length();
++        if (prefs.getLong("backupStamp", 0) == stamp) return;
++        ContentResolver cr = c.getContentResolver();
++        Uri uri = null;
++        String known = prefs.getString("backupUri", null);
++        if (known != null) {
++            uri = Uri.parse(known);
++            try (OutputStream out = cr.openOutputStream(uri, "wt"); InputStream in = new FileInputStream(save)) {
++                if (out == null) throw new IOException("no stream");
++                copy(in, out);
++                prefs.edit().putLong("backupStamp", stamp).apply();
++                return;
++            } catch (IOException | RuntimeException e) {
++                uri = null;   // deleted by the user, or from an old install: make a new one
++            }
++        }
++        ContentValues v = new ContentValues();
++        v.put(MediaStore.MediaColumns.DISPLAY_NAME, BACKUP_NAME);
++        v.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
++        v.put(MediaStore.MediaColumns.RELATIVE_PATH, FOLDER);
++        try {
++            uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
++            if (uri == null) return;
++            try (OutputStream out = cr.openOutputStream(uri, "wt"); InputStream in = new FileInputStream(save)) {
++                if (out == null) return;
++                copy(in, out);
++            }
++            prefs.edit().putString("backupUri", uri.toString()).putLong("backupStamp", stamp).apply();
++        } catch (IOException | RuntimeException ignored) {
++            // Best effort: a failed backup must never disturb the game.
++        }
++    }
++
++    static void requestExport(Activity a) {
++        if (!saveFile(a).isFile()) {
++            Toast.makeText(a, "No save yet -- save in the game first.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
++        i.addCategory(Intent.CATEGORY_OPENABLE);
++        i.setType("application/octet-stream");
++        i.putExtra(Intent.EXTRA_TITLE, SAVE);
++        a.startActivityForResult(i, REQUEST_EXPORT);
++    }
++
++    static void requestImport(Activity a) {
++        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++        i.addCategory(Intent.CATEGORY_OPENABLE);
++        i.setType("*/*");
++        a.startActivityForResult(i, REQUEST_IMPORT);
++    }
++
++    /** Returns true if the result was one of ours. */
++    static boolean onActivityResult(Activity a, int request, int result, Intent data) {
++        if (request != REQUEST_EXPORT && request != REQUEST_IMPORT) return false;
++        if (result != Activity.RESULT_OK || data == null || data.getData() == null) return true;
++        Uri uri = data.getData();
++        if (request == REQUEST_EXPORT) {
++            try (OutputStream out = a.getContentResolver().openOutputStream(uri, "wt");
++                 InputStream in = new FileInputStream(saveFile(a))) {
++                if (out == null) throw new IOException("no stream");
++                copy(in, out);
++                Toast.makeText(a, "Save backed up.", Toast.LENGTH_LONG).show();
++            } catch (IOException e) {
++                Toast.makeText(a, "Backup failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
++            }
++        } else {
++            confirmImport(a, uri);
++        }
++        return true;
++    }
++
++    private static void confirmImport(Activity a, Uri uri) {
++        new AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Dialog_Alert)
++                .setTitle("Replace your save?")
++                .setMessage("The current save is kept as pokeemerald.sav.bak inside the app. "
++                        + "The game restarts to load the restored save.")
++                .setPositiveButton("Replace", (d, w) -> importFrom(a, uri))
++                .setNegativeButton("Cancel", null)
++                .show();
++    }
++
++    private static void importFrom(Activity a, Uri uri) {
++        File save = saveFile(a);
++        File incoming = new File(a.getFilesDir(), SAVE + ".incoming");
++        try (InputStream in = a.getContentResolver().openInputStream(uri);
++             OutputStream out = new FileOutputStream(incoming)) {
++            if (in == null) throw new IOException("cannot open the file");
++            copy(in, out);
++        } catch (IOException e) {
++            Toast.makeText(a, "Restore failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
++            incoming.delete();
++            return;
++        }
++        if (incoming.length() < MIN_SIZE || incoming.length() > MAX_SIZE) {
++            Toast.makeText(a, "That does not look like a save file (" + incoming.length() + " bytes).",
++                    Toast.LENGTH_LONG).show();
++            incoming.delete();
++            return;
++        }
++        File bak = new File(a.getFilesDir(), SAVE + ".bak");
++        if (save.isFile()) {
++            bak.delete();
++            save.renameTo(bak);
++        }
++        if (!incoming.renameTo(save)) {
++            Toast.makeText(a, "Restore failed: could not replace the save.", Toast.LENGTH_LONG).show();
++            if (bak.isFile()) bak.renameTo(save);
++            return;
++        }
++        // The game holds the old save in memory and would write it back on
++        // the next in-game save, so restart it: relaunch, then end this process.
++        Intent relaunch = a.getPackageManager().getLaunchIntentForPackage(a.getPackageName());
++        if (relaunch != null) {
++            relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
++            a.startActivity(relaunch);
++        }
++        Runtime.getRuntime().exit(0);
++    }
++}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java
 new file mode 100644
-index 000000000..122b1df33
+index 000000000..502a0e752
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,70 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/** How the on-screen controls look. Alphas here are scaled by the user's opacity setting. */
@@ -725,11 +1074,34 @@ index 000000000..122b1df33
 +    public final int face, pressed, outline, label, dpad, accentA, accentB;
 +    public final boolean outlineOnly;
 +
++    /** Handheld skin: drawn as hardware -- a plastic shell around the screen,
++     *  domed A/B, a pivoting cross pad, rubber START/SELECT -- and animated. */
++    public final boolean gba;
++    public final int shell, shellShade, bezel, ink, buttonFace, padFace, rubber;
++
 +    ButtonStyle(String name, int face, int pressed, int outline, int label, int dpad,
 +                int accentA, int accentB, boolean outlineOnly) {
 +        this.name = name; this.face = face; this.pressed = pressed; this.outline = outline;
 +        this.label = label; this.dpad = dpad; this.accentA = accentA; this.accentB = accentB;
 +        this.outlineOnly = outlineOnly;
++        gba = false; shell = shellShade = bezel = ink = buttonFace = padFace = rubber = 0;
++    }
++
++    private ButtonStyle(String name, int shell, int shellShade, int ink, int buttonFace, int padFace) {
++        this.name = name;
++        gba = true;
++        this.shell = 0xFF000000 | shell; this.shellShade = 0xFF000000 | shellShade;
++        this.bezel = 0xFF2A2A31; this.ink = 0xFF000000 | ink;
++        this.buttonFace = 0xFF000000 | buttonFace; this.padFace = 0xFF000000 | padFace;
++        this.rubber = 0xFF3A3A40;
++        // Flat-skin fields, used for the gear and the layout editor.
++        face = argb(150, padFace); pressed = argb(220, buttonFace); outline = argb(200, ink);
++        label = argb(255, 0xF0F0F4); dpad = argb(200, padFace); accentA = accentB = 0; outlineOnly = false;
++    }
++
++    /** Hardware skins, appended so stored style indices keep their meaning. */
++    static ButtonStyle gba(String name, int shell, int shellShade, int ink, int buttonFace, int padFace) {
++        return new ButtonStyle(name, shell, shellShade, ink, buttonFace, padFace);
 +    }
 +
 +    static int argb(int a, int rgb) { return (a << 24) | (rgb & 0xFFFFFF); }
@@ -752,14 +1124,108 @@ index 000000000..122b1df33
 +                argb(255, 0xE6F4FF), argb(130, 0x0C3A6E), argb(200, 0x2F8AE0), argb(200, 0x1B5A9E), false),
 +        new ButtonStyle("Retro Green", argb(150, 0x306230), argb(220, 0x8BAC0F), argb(220, 0x0F380F),
 +                argb(255, 0x9BBC0F), argb(150, 0x306230), argb(200, 0x0F380F), argb(200, 0x0F380F), false),
++        // Handheld shells. Colours after the classic 2001 plastics; no logos.
++        //              name                shell     shade     ink       A/B face  pad
++        gba("Handheld Indigo",   0x4B3D92, 0x332868, 0xC9C2EE, 0xB7AEDD, 0x1C1C22),
++        gba("Handheld Glacier",  0x86AFD8, 0x5E86B0, 0x1F3550, 0xDDE6EF, 0x2A2F38),
++        gba("Handheld Fuchsia",  0xC63A86, 0x8E2460, 0xFFD3EA, 0xE6E0E8, 0x1C1C22),
++        gba("Handheld Arctic",   0xE9E9EE, 0xC4C4CC, 0x55555F, 0xCACAD2, 0x2A2A30),
++        gba("Handheld Black",    0x2C2C31, 0x161619, 0xA6A6B0, 0x5A5A62, 0x0E0E10),
++        gba("Handheld Spice",    0xF07F24, 0xB85A12, 0x3A1E08, 0xF4E6D6, 0x1C1C22),
++        gba("Handheld Platinum", 0xC2C6CE, 0x8F949E, 0x34363C, 0xE2E4E8, 0x2A2A30),
++        gba("Handheld Emerald",  0x178C5F, 0x0C5A3C, 0xF0D27A, 0xE9F5EE, 0x15201B),
 +    };
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsAnimator.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsAnimator.java
+new file mode 100644
+index 000000000..70799ef2c
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsAnimator.java
+@@ -0,0 +1,78 @@
++package com.pokeemerald.experimental.controls;
++
++import java.util.HashMap;
++import java.util.Map;
++
++/**
++ * Press animation state: each button's travel (0 up .. 1 fully down) and the
++ * D-pad's tilt, driven by small damped springs so presses feel physical --
++ * a quick firm press, and a release that springs back with a slight bounce.
++ * Pure Java; time is passed in, so it is tested off-device.
++ */
++public final class ControlsAnimator {
++    /** One damped spring. */
++    static final class Spring {
++        float x, v;
++        void step(float target, float dt, boolean pressing) {
++            // Stiffer when pressing (a press is crisp), a little underdamped on
++            // release so the button overshoots its rest and settles.
++            float k = pressing ? 2600f : 1500f;
++            float zeta = pressing ? 1.0f : 0.55f;
++            float c = 2f * zeta * (float) Math.sqrt(k);
++            float a = k * (target - x) - c * v;
++            v += a * dt;
++            x += v * dt;
++        }
++        boolean settled(float target) {
++            return Math.abs(target - x) < 0.002f && Math.abs(v) < 0.02f;
++        }
++    }
++
++    private final Map<String, Spring> travel = new HashMap<>();
++    private final Spring tiltX = new Spring(), tiltY = new Spring();
++    private long lastNanos = -1;
++    private boolean animating;
++
++    /** Advance to time nowNanos for the given layout and pressed keys. */
++    public void step(ControlsLayout layout, int pressed, long nowNanos) {
++        float dt = lastNanos < 0 ? 0f : (nowNanos - lastNanos) / 1e9f;
++        lastNanos = nowNanos;
++        animating = false;
++        // Integrate in small fixed sub-steps: stable however irregular the
++        // frame timing is, and a long pause just settles everything.
++        dt = Math.min(dt, 0.1f);
++        int steps = Math.max(1, (int) Math.ceil(dt / 0.004f));
++        float h = dt / steps;
++
++        float tx = ((pressed & Keys.RIGHT) != 0 ? 1 : 0) - ((pressed & Keys.LEFT) != 0 ? 1 : 0);
++        float ty = ((pressed & Keys.DOWN) != 0 ? 1 : 0) - ((pressed & Keys.UP) != 0 ? 1 : 0);
++        if (tx != 0 && ty != 0) { tx *= 0.7071f; ty *= 0.7071f; }   // a diagonal rocks both arms halfway
++        boolean dpadDown = tx != 0 || ty != 0;
++
++        for (ControlsLayout.Item it : layout.items) {
++            if (it.shape == ControlsLayout.Shape.DPAD || it.keys == 0) continue;
++            Spring s = travel.get(it.id);
++            if (s == null) travel.put(it.id, s = new Spring());
++            boolean down = (pressed & it.keys) == it.keys;
++            for (int i = 0; i < steps; i++) s.step(down ? 1f : 0f, h, down);
++            if (!s.settled(down ? 1f : 0f)) animating = true;
++        }
++        for (int i = 0; i < steps; i++) {
++            tiltX.step(tx, h, dpadDown);
++            tiltY.step(ty, h, dpadDown);
++        }
++        if (!tiltX.settled(tx) || !tiltY.settled(ty)) animating = true;
++    }
++
++    /** Button travel, 0 (up) .. 1 (down); slightly negative while bouncing back. */
++    public float travel(String id) {
++        Spring s = travel.get(id);
++        return s == null ? 0f : s.x;
++    }
++
++    public float tiltX() { return tiltX.x; }
++    public float tiltY() { return tiltY.x; }
++
++    /** True while anything is still moving: keep drawing frames. */
++    public boolean animating() { return animating; }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsLayout.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsLayout.java
 new file mode 100644
-index 000000000..6052292ea
+index 000000000..06df38408
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsLayout.java
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,140 @@
 +package com.pokeemerald.experimental.controls;
 +
 +import java.util.ArrayList;
@@ -789,11 +1255,16 @@ index 000000000..6052292ea
 +
 +    public final List<Item> items = new ArrayList<>();
 +    public final int width, height;
++    /** Where SDL draws the game: integer-scaled and centred. Nothing may paint inside it. */
++    public final int gameL, gameT, gameR, gameB;
 +    public final boolean editing;
 +    private final boolean diagonals;
 +
 +    public ControlsLayout(int width, int height, Settings settings, boolean editing) {
 +        this.width = width; this.height = height; this.editing = editing;
++        int gs = Math.max(1, Math.min(width / 240, height / 160));
++        gameL = (width - 240 * gs) / 2; gameT = (height - 160 * gs) / 2;
++        gameR = gameL + 240 * gs; gameB = gameT + 160 * gs;
 +        this.diagonals = settings.diagonals;
 +
 +        // The side bands left by the game screen; never narrower than 14% of
@@ -897,10 +1368,10 @@ index 000000000..6052292ea
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
 new file mode 100644
-index 000000000..8cae3858c
+index 000000000..74870a27c
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,358 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/** Draws a ControlsLayout through a Painter: the same code on device and in previews. */
@@ -915,6 +1386,20 @@ index 000000000..8cae3858c
 +    }
 +
 +    public static void draw(Painter p, ControlsLayout layout, ButtonStyle st, float opacity, int pressed) {
++        draw(p, layout, st, opacity, pressed, null, false);
++    }
++
++    /**
++     * anim supplies press travel and D-pad tilt (null: snap to pressed);
++     * shell draws the handheld body around the game screen first.
++     */
++    public static void draw(Painter p, ControlsLayout layout, ButtonStyle st, float opacity, int pressed,
++                            ControlsAnimator anim, boolean shell) {
++        if (st.gba) {
++            if (shell) drawShell(p, layout, st);
++            Hardware.draw(p, layout, st, opacity, pressed, anim);
++            return;
++        }
 +        for (ControlsLayout.Item it : layout.items) {
 +            float o = it.keys == 0 ? Math.max(opacity, 0.6f) : opacity;   // gear/edit stay findable
 +            boolean down = it.keys != 0 && (pressed & it.keys) == it.keys
@@ -998,6 +1483,252 @@ index 000000000..8cae3858c
 +        p.fillTriangle(it.cx - tip, it.cy, it.cx - base, it.cy - a, it.cx - base, it.cy + a, c);
 +        p.fillTriangle(it.cx + tip, it.cy, it.cx + base, it.cy - a, it.cx + base, it.cy + a, c);
 +    }
++
++    // ---- colour helpers -----------------------------------------------------
++
++    static int mix(int a, int b, float t) {
++        t = t < 0 ? 0 : t > 1 ? 1 : t;
++        int r = 0;
++        for (int sh = 0; sh < 32; sh += 8) {
++            int ca = (a >>> sh) & 0xFF, cb = (b >>> sh) & 0xFF;
++            r |= (Math.round(ca + (cb - ca) * t) & 0xFF) << sh;
++        }
++        return r;
++    }
++    /** f > 0 lightens toward white, f < 0 darkens toward black; alpha kept. */
++    static int shade(int argb, float f) {
++        int target = f >= 0 ? (argb & 0xFF000000) | 0xFFFFFF : argb & 0xFF000000;
++        return mix(argb, target, Math.abs(f));
++    }
++    static int alpha(int argb, int a) { return (a << 24) | (argb & 0xFFFFFF); }
++
++    // ---- the handheld body ---------------------------------------------------
++
++    /** For tests: the shell alone. */
++    public static void drawShellForTest(Painter p, ControlsLayout l, ButtonStyle st) { drawShell(p, l, st); }
++
++    /** Plastic shell, screen bezel, power LED, speaker grille and screws -- all
++     *  outside the game rectangle, which SDL draws underneath this overlay. */
++    static void drawShell(Painter p, ControlsLayout l, ButtonStyle st) {
++        int w = l.width, h = l.height;
++        int top = shade(st.shell, 0.10f), bottom = st.shellShade;
++        float[][] regions = {
++            {0, 0, w, l.gameT}, {0, l.gameB, w, h}, {0, l.gameT, l.gameL, l.gameB}, {l.gameR, l.gameT, w, l.gameB}};
++        for (float[] r : regions)
++            if (r[2] > r[0] && r[3] > r[1]) p.fillRectGradient(r[0], r[1], r[2], r[3], top, bottom, 0, h);
++        // A soft sheen across the top, as moulded plastic catches light.
++        p.fillRectGradient(0, 0, l.gameL, h * 0.18f, alpha(0xFFFFFF, 40), alpha(0xFFFFFF, 0), 0, h * 0.18f);
++        p.fillRectGradient(l.gameR, 0, w, h * 0.18f, alpha(0xFFFFFF, 40), alpha(0xFFFFFF, 0), 0, h * 0.18f);
++
++        // Screen bezel: a dark lens frame hugging the game, never over it.
++        float margin = Math.min(Math.min(l.gameT, h - l.gameB), Math.min(l.gameL, w - l.gameR));
++        float t = Math.max(4, Math.min(h * 0.05f, Math.max(margin * 0.9f, h * 0.02f)));
++        // Two bands: straight bars hugging the game edge, then a rounded ring
++        // further out. A rounded stroke's inner edge cuts each corner inward,
++        // so a single ring at the edge would paint wedges over the game's
++        // corner pixels; pushed out by t/2 its corner cuts land in the bars.
++        float g0 = l.gameL, g1 = l.gameT, g2 = l.gameR, g3 = l.gameB, half = t / 2;
++        p.fillRoundRect(g0 - half, g1 - half, g2 + half, g1, 0, st.bezel);
++        p.fillRoundRect(g0 - half, g3, g2 + half, g3 + half, 0, st.bezel);
++        p.fillRoundRect(g0 - half, g1, g0, g3, 0, st.bezel);
++        p.fillRoundRect(g2, g1, g2 + half, g3, 0, st.bezel);
++        float ring = t * 0.75f;
++        p.strokeRoundRect(g0 - ring, g1 - ring, g2 + ring, g3 + ring, t * 0.6f, half + 1, st.bezel);
++        p.strokeRoundRect(g0 - t, g1 - t, g2 + t, g3 + t, t * 0.85f, Math.max(1, t * 0.08f),
++                shade(st.shell, -0.35f));
++        // the lens edge catching light, two pixels out
++        p.strokeRoundRect(g0 - 2.5f, g1 - 2.5f, g2 + 2.5f, g3 + 2.5f, 2.5f, 1.5f, alpha(0xFFFFFF, 50));
++
++        // Power LED with a little glow, on the left of the bezel.
++        float led = Math.max(3, h * 0.008f), lx = l.gameL - t * 0.5f, ly = l.gameT + h * 0.10f;
++        if (l.gameL - t > led * 3) {
++            lx = l.gameL - t - Math.max(led * 6, h * 0.035f);
++            p.fillCircleRadial(lx, ly, led * 3, lx, ly, alpha(0x7CFF6A, 110), alpha(0x7CFF6A, 0));
++            p.fillCircle(lx, ly, led, 0xFF8CFF7A);
++            p.text("POWER", lx, ly + led * 3.4f, Math.max(8, h * 0.016f), alpha(st.ink, 200));
++        }
++
++        // Speaker grille, bottom right: rows of slanted slots.
++        float gx = w - Math.max(h * 0.09f, (w - l.gameR) * 0.22f), gy = h - h * 0.075f, dot = Math.max(2, h * 0.006f);
++        for (int row = 0; row < 3; row++)
++            for (int col = 0; col < 5; col++)
++                p.fillCircle(gx + col * dot * 3.2f - row * dot * 1.6f, gy + row * dot * 3.2f, dot,
++                        shade(st.shellShade, -0.45f));
++
++        // Screws.
++        float sr = Math.max(3, h * 0.009f);
++        float[][] screws = {{w * 0.025f, h * 0.04f}, {w * 0.975f, h * 0.04f}, {w * 0.025f, h * 0.96f}, {w * 0.975f, h * 0.96f}};
++        for (float[] sc : screws) {
++            p.fillCircle(sc[0], sc[1], sr * 1.3f, shade(st.shellShade, -0.2f));
++            p.fillCircleRadial(sc[0], sc[1], sr, sc[0] - sr * 0.3f, sc[1] - sr * 0.3f, 0xFFB8B8C0, 0xFF5A5A62);
++            p.fillRoundRect(sc[0] - sr * 0.7f, sc[1] - sr * 0.12f, sc[0] + sr * 0.7f, sc[1] + sr * 0.12f, 1, 0xFF404048);
++        }
++    }
++
++    /** The hardware skin's buttons, animated by a ControlsAnimator. */
++    static final class Hardware {
++        private Hardware() {}
++
++        static void draw(Painter p, ControlsLayout l, ButtonStyle st, float o, int pressed, ControlsAnimator anim) {
++            for (ControlsLayout.Item it : l.items) {
++                float travel = anim != null ? anim.travel(it.id)
++                        : (it.keys != 0 && (pressed & it.keys) == it.keys ? 1f : 0f);
++                if (it.shape == ControlsLayout.Shape.DPAD) {
++                    float tx, ty;
++                    if (anim != null) { tx = anim.tiltX(); ty = anim.tiltY(); }
++                    else {
++                        tx = ((pressed & Keys.RIGHT) != 0 ? 1 : 0) - ((pressed & Keys.LEFT) != 0 ? 1 : 0);
++                        ty = ((pressed & Keys.DOWN) != 0 ? 1 : 0) - ((pressed & Keys.UP) != 0 ? 1 : 0);
++                        if (tx != 0 && ty != 0) { tx *= 0.7071f; ty *= 0.7071f; }
++                    }
++                    pad(p, it, st, o, tx, ty, l.editing);
++                } else if (it.keys == 0) {
++                    drawCircleOrPill(p, it, st, o, l.editing);          // gear, DONE, RESET
++                } else if (it.id.equals("l") || it.id.equals("r")) {
++                    shoulder(p, it, st, o, travel, l.editing);
++                } else if (it.shape == ControlsLayout.Shape.CIRCLE) {
++                    dome(p, it, st, o, travel, l.editing);
++                } else {
++                    rubber(p, it, st, o, travel, l.editing);
++                }
++            }
++        }
++
++        private static void drawCircleOrPill(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, boolean edit) {
++            if (it.shape == ControlsLayout.Shape.PILL) drawPill(p, it, st, Math.max(o, 0.6f), false, edit);
++            else drawCircle(p, it, st, Math.max(o, 0.6f), false, edit);
++        }
++
++        /** Domed A/B: sinks, flattens and darkens with travel; overshoots on release. */
++        private static void dome(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, float t, boolean edit) {
++            float r = it.radius() * 0.86f;
++            boolean small = !it.id.equals("a") && !it.id.equals("b");
++            // the hole in the shell the button sits in
++            p.fillCircle(it.cx, it.cy + r * 0.04f, r * 1.12f, fade(shade(st.shellShade, -0.35f), o));
++            // drop shadow shrinks as the button goes down
++            p.fillCircle(it.cx + r * 0.05f, it.cy + r * (0.12f - 0.08f * t), r * 1.01f, fade(alpha(0, 90), o * (1 - 0.6f * t)));
++            float rr = r * (1 - 0.08f * t), cy = it.cy + r * 0.06f * t;
++            float lift = 1 - 0.65f * Math.max(0, Math.min(1, t));
++            int face = st.buttonFace;
++            p.fillCircleRadial(it.cx, cy, rr, it.cx - rr * 0.38f * lift, cy - rr * 0.42f * lift,
++                    fade(shade(face, 0.40f * lift), o), fade(shade(face, -0.30f - 0.12f * t), o));
++            // specular glint, gone when pressed flat
++            p.fillCircleRadial(it.cx - rr * 0.35f, cy - rr * 0.42f, rr * 0.38f, it.cx - rr * 0.35f, cy - rr * 0.42f,
++                    fade(alpha(0xFFFFFF, Math.round(150 * lift)), o), fade(alpha(0xFFFFFF, 0), o));
++            if (edit) p.strokeCircle(it.cx, it.cy, it.radius(), 3, EDIT_OUTLINE);
++            if (small) {
++                p.text(it.label, it.cx, cy, rr * 0.9f, fade(shade(face, -0.6f), o));
++            } else {
++                // A and B are printed on the shell beside the button, as on the hardware.
++                p.text(it.label, it.cx + r * 1.05f, it.cy + r * 1.05f, r * 0.5f, fade(st.ink, o));
++            }
++        }
++
++        /** START/SELECT/BALL: small rubber pills with the label printed below. */
++        private static void rubber(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, float t, boolean edit) {
++            float w = it.w * 0.78f, h = Math.min(it.h * 0.55f, w * 0.32f);
++            float cx = it.cx, cy = it.cy - it.h * 0.12f;
++            p.fillRoundRect(cx - w / 2 - h * 0.12f, cy - h / 2 - h * 0.12f + h * 0.08f, cx + w / 2 + h * 0.12f,
++                    cy + h / 2 + h * 0.12f + h * 0.08f, h, fade(shade(st.shellShade, -0.35f), o));
++            float sw = w * (1 - 0.05f * t), sh = h * (1 - 0.18f * t), dy = h * 0.12f * t;
++            p.fillRoundRect(cx - sw / 2, cy - sh / 2 + dy, cx + sw / 2, cy + sh / 2 + dy, sh / 2,
++                    fade(shade(st.rubber, 0.18f - 0.3f * Math.max(0, t)), o));
++            p.fillRoundRect(cx - sw / 2 + sh * 0.2f, cy - sh / 2 + dy + sh * 0.12f, cx + sw / 2 - sh * 0.2f,
++                    cy - sh * 0.05f + dy, sh / 3, fade(alpha(0xFFFFFF, Math.round(45 * (1 - Math.max(0, t)))), o));
++            if (edit) p.strokeRoundRect(it.cx - it.w / 2, it.cy - it.h / 2, it.cx + it.w / 2, it.cy + it.h / 2, it.h / 2, 3, EDIT_OUTLINE);
++            p.text(it.label, cx, cy + h * 1.15f, Math.max(8, it.h * 0.36f), fade(st.ink, o));
++        }
++
++        /** L/R: the shoulder buttons, in a lighter tone of the shell; dip when pressed. */
++        private static void shoulder(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, float t, boolean edit) {
++            float l = it.cx - it.w / 2, top = it.cy - it.h / 2, r = it.cx + it.w / 2, b = it.cy + it.h / 2;
++            float dy = it.h * 0.14f * t;
++            p.fillRoundRect(l, top + it.h * 0.10f, r, b + it.h * 0.10f, it.h * 0.45f, fade(shade(st.shellShade, -0.3f), o));
++            int face = shade(st.shell, 0.22f - 0.25f * Math.max(0, t));
++            p.fillRoundRect(l, top + dy, r, b + dy - it.h * 0.06f, it.h * 0.45f, fade(face, o));
++            p.fillRoundRect(l + it.h * 0.3f, top + dy + it.h * 0.08f, r - it.h * 0.3f, top + dy + it.h * 0.24f, it.h * 0.08f,
++                    fade(alpha(0xFFFFFF, Math.round(70 * (1 - Math.max(0, t)))), o));
++            if (edit) p.strokeRoundRect(l, top, r, b, it.h * 0.45f, 3, EDIT_OUTLINE);
++            p.text(it.label, it.cx, it.cy + dy, it.h * 0.5f, fade(st.ink, o));
++        }
++
++        /**
++         * The cross pad, pivoting on its centre like the real rocker: the pressed
++         * arm sinks (foreshortened and darker), the opposite arm rises into the
++         * light, the whole cross slides a touch toward the press, and its
++         * shadow shifts. (tx, ty) is the tilt, a point in the unit disc.
++         */
++        private static void pad(Painter p, ControlsLayout.Item it, ButtonStyle st, float o,
++                                float tx, float ty, boolean edit) {
++            float r = it.radius() * 0.92f, a = r * 0.34f;
++            float cx = it.cx + tx * r * 0.05f, cy = it.cy + ty * r * 0.05f;
++            int face = st.padFace;
++            // the round well moulded into the shell
++            p.fillCircle(it.cx, it.cy + r * 0.03f, r * 1.1f, fade(shade(st.shellShade, -0.22f), o));
++            p.fillCircleRadial(it.cx, it.cy, r * 1.06f, it.cx, it.cy - r * 0.3f,
++                    fade(shade(st.shell, -0.05f), o), fade(shade(st.shellShade, -0.25f), o));
++            // shadow of the cross: longer on the side that is raised
++            float sx = r * 0.06f - tx * r * 0.05f, sy = r * 0.09f - ty * r * 0.05f;
++            cross(p, it.cx + sx, it.cy + sy, r, a, 0, 0, fade(alpha(0, 110), o), true);
++            // a thin lighter rim, moving with each arm, so a black cross still
++            // reads on a dark shell
++            int rim = fade(alpha(shade(face, 0.40f), 150), o);
++            for (float[] d : new float[][] {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}) {
++                float k = d[0] * tx + d[1] * ty;
++                float len = r * (1 - 0.11f * Math.max(0, k) + 0.035f * Math.max(0, -k));
++                float tip = a * (1 - 0.07f * k);
++                arm(p, cx, cy, d, a * 1.07f, len + a * 0.07f, tip * 1.07f + a * 0.0f, rim);
++            }
++            // the cross itself, arm by arm
++            float[][] dirs = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
++            for (float[] d : dirs) {
++                float k = d[0] * tx + d[1] * ty;                 // how far this arm is pushed down
++                float len = r * (1 - 0.11f * Math.max(0, k) + 0.035f * Math.max(0, -k));
++                float tip = a * (1 - 0.07f * k);
++                int c = k > 0 ? shade(face, -0.45f * k) : shade(face, 0.10f * -k);
++                arm(p, cx, cy, d, a, len, tip, fade(c, o));
++                // moulded highlight along the arm's upper edge, fading as it sinks
++                int hl = fade(alpha(0xFFFFFF, Math.round(60 * (1 - 0.8f * Math.max(0, k)) + 30 * Math.max(0, -k))), o);
++                hilite(p, cx, cy, d, a, len, tip, hl);
++                // engraved arrow near the tip
++                float m = len * 0.72f, s2 = a * 0.42f;
++                float ax = cx + d[0] * m, ay = cy + d[1] * m, px = -d[1], py = d[0];
++                p.fillTriangle(ax + d[0] * s2, ay + d[1] * s2, ax - d[0] * s2 * 0.4f + px * s2, ay - d[1] * s2 * 0.4f + py * s2,
++                        ax - d[0] * s2 * 0.4f - px * s2, ay - d[1] * s2 * 0.4f - py * s2, fade(shade(c, -0.5f), o));
++            }
++            // centre hub with its dimple
++            p.fillRoundRect(cx - a, cy - a, cx + a, cy + a, a * 0.2f, fade(face, o));
++            p.fillCircleRadial(cx, cy, a * 0.7f, cx + a * 0.18f, cy + a * 0.22f,
++                    fade(shade(face, -0.45f), o), fade(shade(face, 0.12f), o));
++            if (edit) p.strokeCircle(it.cx, it.cy, it.radius(), 3, EDIT_OUTLINE);
++        }
++
++        private static void arm(Painter p, float cx, float cy, float[] d, float a, float len, float tip, int c) {
++            float px = -d[1], py = d[0];
++            p.fillPolygon(new float[] {
++                cx + d[0] * a + px * a, cy + d[1] * a + py * a,
++                cx + d[0] * len + px * tip, cy + d[1] * len + py * tip,
++                cx + d[0] * len - px * tip, cy + d[1] * len - py * tip,
++                cx + d[0] * a - px * a, cy + d[1] * a - py * a}, c);
++        }
++
++        private static void hilite(Painter p, float cx, float cy, float[] d, float a, float len, float tip, int c) {
++            // the edge facing up-left catches the light
++            float px = -d[1], py = d[0];
++            float side = (px + py) < 0 ? 1 : -1;                     // pick the up/left-facing edge
++            float e0 = a * 0.92f, e1 = tip * 0.92f, w = a * 0.12f;
++            p.fillPolygon(new float[] {
++                cx + d[0] * a + side * px * e0, cy + d[1] * a + side * py * e0,
++                cx + d[0] * len * 0.96f + side * px * e1, cy + d[1] * len * 0.96f + side * py * e1,
++                cx + d[0] * len * 0.96f + side * px * (e1 - w), cy + d[1] * len * 0.96f + side * py * (e1 - w),
++                cx + d[0] * a + side * px * (e0 - w), cy + d[1] * a + side * py * (e0 - w)}, c);
++        }
++
++        private static void cross(Painter p, float cx, float cy, float r, float a, float tx, float ty, int c, boolean flat) {
++            p.fillRoundRect(cx - a, cy - r, cx + a, cy + r, a * 0.3f, c);
++            p.fillRoundRect(cx - r, cy - a, cx + r, cy + a, a * 0.3f, c);
++        }
++    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java
 new file mode 100644
@@ -1026,10 +1757,10 @@ index 000000000..3be686700
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java
 new file mode 100644
-index 000000000..44757f8b9
+index 000000000..92eb4c09a
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,25 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/**
@@ -1043,15 +1774,24 @@ index 000000000..44757f8b9
 +    void fillRoundRect(float l, float t, float r, float b, float radius, int argb);
 +    void strokeRoundRect(float l, float t, float r, float b, float radius, float width, int argb);
 +    void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3, int argb);
++    /** Filled polygon from x0,y0,x1,y1,... */
++    void fillPolygon(float[] xy, int argb);
++    /** Rectangle filled with a vertical gradient running from top colour at
++     *  y=g0 to bottom colour at y=g1 (global coordinates, so adjacent
++     *  rectangles sharing g0/g1 join seamlessly). */
++    void fillRectGradient(float l, float t, float r, float b, int top, int bottom, float g0, float g1);
++    /** Circle of radius r at (cx, cy) filled with a radial gradient: inner
++     *  colour at (fx, fy) fading to outer at distance r from it. */
++    void fillCircleRadial(float cx, float cy, float r, float fx, float fy, int inner, int outer);
 +    /** Text centred on (cx, cy). */
 +    void text(String s, float cx, float cy, float size, int argb);
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
 new file mode 100644
-index 000000000..293544d64
+index 000000000..700e52c71
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,71 @@
 +package com.pokeemerald.experimental.controls;
 +
 +import java.util.HashMap;
@@ -1070,6 +1810,9 @@ index 000000000..293544d64
 +    public boolean haptics = true;
 +    public boolean arenaButtons = true;
 +    public boolean diagonals = true;
++    /** Chosen handheld-shell theme (index into Themes.ALL), or -1. Shown when
++     *  the game's own background is OFF -- choosing a shell turns it off. */
++    public int shellTheme = -1;
 +    /** Moved controls: id -> {x, y} as fractions of the view size. */
 +    public final Map<String, float[]> positions = new HashMap<>();
 +
@@ -1079,7 +1822,8 @@ index 000000000..293544d64
 +        StringBuilder s = new StringBuilder();
 +        s.append("v=1;style=").append(style).append(";opacity=").append(opacity)
 +         .append(";scale=").append(scale).append(";haptics=").append(haptics ? 1 : 0)
-+         .append(";arena=").append(arenaButtons ? 1 : 0).append(";diag=").append(diagonals ? 1 : 0);
++         .append(";arena=").append(arenaButtons ? 1 : 0).append(";diag=").append(diagonals ? 1 : 0)
++         .append(";shell=").append(shellTheme);
 +        for (Map.Entry<String, float[]> e : positions.entrySet())
 +            s.append(";pos.").append(e.getKey()).append('=').append(e.getValue()[0]).append(',').append(e.getValue()[1]);
 +        return s.toString();
@@ -1101,6 +1845,7 @@ index 000000000..293544d64
 +                case "haptics": s.haptics = !v.equals("0"); break;
 +                case "arena":   s.arenaButtons = !v.equals("0"); break;
 +                case "diag":    s.diagonals = !v.equals("0"); break;
++                case "shell":   s.shellTheme = Integer.parseInt(v); break;
 +                default:
 +                    if (k.startsWith("pos.")) {
 +                        String[] xy = v.split(",");
@@ -1113,15 +1858,17 @@ index 000000000..293544d64
 +            }
 +        }
 +        if (s.style < MATCH_THEME || s.style >= ButtonStyle.ALL.length) s.style = MATCH_THEME;
++        if (s.shellTheme < -1 || s.shellTheme >= Themes.ALL.length || !Themes.ALL[s.shellTheme < 0 ? 0 : s.shellTheme].isShell())
++            s.shellTheme = -1;
 +        return s;
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
 new file mode 100644
-index 000000000..416aa010d
+index 000000000..f31f9d029
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,47 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/**
@@ -1137,6 +1884,11 @@ index 000000000..416aa010d
 +        this.name = name; this.background = background; this.style = style;
 +    }
 +
++    /** background value for a handheld shell: the overlay draws it, no image. */
++    public static final int SHELL = -2;
++
++    public boolean isShell() { return background == SHELL; }
++
 +    public static final Themes[] ALL = {
 +        new Themes("Starfall", 0, 0),
 +        new Themes("Open Sea", 1, 6),
@@ -1147,20 +1899,42 @@ index 000000000..416aa010d
 +        new Themes("Eon Night", 6, 1),
 +        new Themes("GBA Indigo", 7, 1),
 +        new Themes("Classic Green", 8, 7),
++        new Themes("Handheld Indigo", SHELL, 8),
++        new Themes("Handheld Glacier", SHELL, 9),
++        new Themes("Handheld Fuchsia", SHELL, 10),
++        new Themes("Handheld Arctic", SHELL, 11),
++        new Themes("Handheld Black", SHELL, 12),
++        new Themes("Handheld Spice", SHELL, 13),
++        new Themes("Handheld Platinum", SHELL, 14),
++        new Themes("Handheld Emerald", SHELL, 15),
 +    };
 +
 +    /** The theme whose background is the given BACKGROUND number, or -1 (custom/off). */
 +    public static int forBackground(int background) {
 +        for (int i = 0; i < ALL.length; i++)
-+            if (ALL[i].background == background) return i;
++            if (ALL[i].background == background && background != SHELL) return i;
 +        return -1;
 +    }
 +}
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index b991f1d93..21c027454 100644
+index b991f1d93..b01bc1cc5 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -901,6 +901,14 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
+@@ -794,6 +794,13 @@ static void StoreSaveFile()
+     {
+         fseek(sSaveFile, 0, SEEK_SET);
+         fwrite(FLASH_BASE, 1, sizeof(FLASH_BASE), sSaveFile);
++        // Without these the save sits in stdio's buffer until the file is
++        // closed -- which on Android it never is: the system ends an app by
++        // killing the process, so the tail of a save could simply vanish.
++        fflush(sSaveFile);
++#if defined(__linux__)
++        fsync(fileno(sSaveFile));
++#endif
+     }
+ }
+ 
+@@ -901,6 +908,14 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
      return Platform_GetBorderBackground();
  }
  

@@ -75,6 +75,64 @@ public final class ControlsTest {
         check(junk.style == Settings.MATCH_THEME && junk.opacity == 1f && junk.scale == 0.7f, "junk clamps");
         check(Themes.forBackground(4) == 4 && Themes.forBackground(42) == -1, "theme lookup");
 
+        // ---- press animation ----
+        ControlsLayout al = new ControlsLayout(2400, 1080, new Settings(), false);
+        ControlsAnimator an = new ControlsAnimator();
+        long t = 0, ms = 1_000_000L;
+        an.step(al, 0, t);
+        for (int i = 0; i < 5; i++) an.step(al, Keys.A | Keys.RIGHT, t += 16 * ms);   // 80ms held
+        check(an.travel("a") > 0.9f && an.travel("a") < 1.05f, "A travels down within 80ms (" + an.travel("a") + ")");
+        check(an.tiltX() > 0.9f && Math.abs(an.tiltY()) < 0.05f, "D-pad tilts right");
+        float lowest = 1f;
+        int settledAt = -1;
+        for (int i = 0; i < 40; i++) {
+            an.step(al, 0, t += 16 * ms);
+            lowest = Math.min(lowest, an.travel("a"));
+            if (settledAt < 0 && !an.animating()) settledAt = i;
+        }
+        check(lowest < 0f, "release overshoots its rest (bounces): " + lowest);
+        check(settledAt > 0 && settledAt * 16 < 400, "release settles within 400ms (" + settledAt * 16 + "ms)");
+        check(Math.abs(an.travel("a")) < 0.01f && Math.abs(an.tiltX()) < 0.01f, "back at rest");
+        for (int i = 0; i < 10; i++) an.step(al, Keys.UP | Keys.LEFT, t += 16 * ms);
+        check(Math.abs(an.tiltX() + 0.707f) < 0.05f && Math.abs(an.tiltY() + 0.707f) < 0.05f, "diagonal splits the tilt");
+        an.step(al, Keys.UP | Keys.LEFT, t += 5_000 * ms);   // a long stall (app paused) stays stable
+        check(Math.abs(an.tiltX() + 0.707f) < 0.05f && !Float.isNaN(an.tiltX()), "long frame gap is stable");
+
+        // ---- handheld themes ----
+        Settings sh = new Settings(); sh.shellTheme = 9;
+        check(Settings.parse(sh.serialize()).shellTheme == 9, "shell theme round trip");
+        check(Settings.parse("shell=2").shellTheme == -1, "a non-shell theme index is rejected");
+        int shells = 0;
+        for (Themes th : Themes.ALL) if (th.isShell()) { shells++; check(ButtonStyle.ALL[th.style].gba, th.name + " uses a hardware style"); }
+        check(shells == 8, "eight handheld shells");
+        check(Themes.forBackground(Themes.SHELL) == -1, "shell is never matched as an image background");
+
+        // ---- every style renders, with and without shell and animation ----
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1200, 540, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        for (ButtonStyle st : ButtonStyle.ALL) {
+            for (boolean edit : new boolean[] {false, true}) {
+                try {
+                    java.awt.Graphics2D g = img.createGraphics();
+                    ControlsLayout rl = new ControlsLayout(1200, 540, new Settings(), edit);
+                    ControlsRenderer.draw(new AwtPainter(g), rl, st, 0.8f, Keys.A | Keys.UP, an, st.gba);
+                    g.dispose();
+                } catch (RuntimeException e) {
+                    check(false, st.name + " render threw " + e);
+                }
+            }
+        }
+        // the shell never paints inside the game rectangle
+        ControlsLayout gl = new ControlsLayout(1200, 540, new Settings(), false);
+        java.awt.image.BufferedImage shellImg = new java.awt.image.BufferedImage(1200, 540, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D sg = shellImg.createGraphics();
+        ControlsRenderer.drawShellForTest(new AwtPainter(sg), gl, ButtonStyle.ALL[8]);
+        sg.dispose();
+        int painted = 0;
+        for (int y = gl.gameT; y < gl.gameB; y += 3)
+            for (int x = gl.gameL; x < gl.gameR; x += 3)
+                if ((shellImg.getRGB(x, y) >>> 24) != 0) painted++;
+        check(painted == 0, "shell leaves the game rectangle untouched (" + painted + " px painted)");
+
         System.out.println(failures == 0 ? "ALL CONTROLS TESTS PASSED" : failures + " FAILURES");
         System.exit(failures == 0 ? 0 : 1);
     }

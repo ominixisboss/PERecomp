@@ -20,6 +20,17 @@ final class AwtPainter implements Painter {
         c(argb); g.setStroke(new BasicStroke(w)); g.draw(new RoundRectangle2D.Float(l, t, r - l, b - t, 2 * rad, 2 * rad)); }
     public void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3, int argb) {
         c(argb); Path2D.Float p = new Path2D.Float(); p.moveTo(x1, y1); p.lineTo(x2, y2); p.lineTo(x3, y3); p.closePath(); g.fill(p); }
+    public void fillPolygon(float[] xy, int argb) {
+        c(argb); Path2D.Float p = new Path2D.Float(); p.moveTo(xy[0], xy[1]);
+        for (int i = 2; i < xy.length; i += 2) p.lineTo(xy[i], xy[i + 1]);
+        p.closePath(); g.fill(p); }
+    public void fillRectGradient(float l, float t, float r, float b, int top, int bottom, float g0, float g1) {
+        g.setPaint(new GradientPaint(0, g0, new Color(top, true), 0, g1, new Color(bottom, true)));
+        g.fill(new Rectangle2D.Float(l, t, r - l, b - t)); }
+    public void fillCircleRadial(float cx, float cy, float r, float fx, float fy, int inner, int outer) {
+        g.setPaint(new RadialGradientPaint(new Point2D.Float(fx, fy), Math.max(1, r), new float[] {0f, 1f},
+                new Color[] {new Color(inner, true), new Color(outer, true)}));
+        g.fill(new Ellipse2D.Float(cx - r, cy - r, 2 * r, 2 * r)); }
     public void text(String s, float cx, float cy, float size, int argb) {
         c(argb); g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, Math.max(1, Math.round(size))));
         FontMetrics m = g.getFontMetrics();

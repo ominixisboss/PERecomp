@@ -33,7 +33,8 @@ public final class Preview {
         g.drawImage(game, (w - 240 * gs) / 2, (h - 160 * gs) / 2, 240 * gs, 160 * gs, null);
         int style = Integer.parseInt(a[2]);
         ControlsLayout lay = new ControlsLayout(w, h, s, edit);
-        ControlsRenderer.draw(new AwtPainter(g), lay, ButtonStyle.ALL[Math.max(0, style)], s.opacity, pressed);
+        ButtonStyle st = ButtonStyle.ALL[Math.max(0, style)];
+        ControlsRenderer.draw(new AwtPainter(g), lay, st, s.opacity, pressed, null, st.gba && a[0].equals("none"));
         ImageIO.write(out, "png", new File(a[3]));
     }
 }
