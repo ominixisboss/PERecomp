@@ -18,41 +18,28 @@ The fork already provides, and this harness only drives:
 - writable save storage in the app's private directory, plus lifecycle handling
 - launcher icons and a display-settings page
 
-## Constraints worth knowing before you build
-
-- **`armeabi-v7a` only.** The game data assumes 32-bit pointers. That means
-  sideloading only: Google Play has required a 64-bit ABI since 2019.
-- The build is a hybrid. `data/*.s` and the song assembly are still assembled
-  with `arm-none-eabi-as` and linked into `libmain.so`, so ARM binutils is a
-  build dependency even though the target is Android.
-- The fork marks its Android support experimental, and **its own CI builds only
-  the GBA ROM** — the Android target is not verified upstream. That is what the
-  workflow here exists to cover.
+> The project overview, download link and testing approach are in the
+> [top-level README](../README.md). The 64-bit port's engineering log is
+> [ARM64-PORT.md](ARM64-PORT.md); signing is in [SIGNING.md](SIGNING.md).
+> This page covers the build harness itself.
 
 ## Building
 
 ```sh
 export JAVA_HOME=...          # JDK 17
 export ANDROID_HOME=...       # with ndk;26.3.11579264 and cmake;3.22.1
-sudo apt-get install -y build-essential binutils-arm-none-eabi libpng-dev
+sudo apt-get install -y build-essential binutils-arm-none-eabi binutils-aarch64-linux-gnu \
+                        libpng-dev python3-pil
 
-./android-build/build-android.sh
+POKEEMERALD_ABI=arm64-v8a ./android-build/build-android.sh
 ```
 
 The APK lands at
 `.pokeemerald-multiplatform/android/app/build/outputs/apk/debug/app-debug.apk`.
-
-`.github/workflows/pokeemerald-android.yml` runs the same script on CI and
-uploads the APK as a build artifact.
-
-## Status
-
-The APK builds. Verified in CI on 2026-09-17
-([run 8](https://github.com/ominixisboss/AAZ-Mobile/actions/runs/35282350977)),
-producing a 14.7 MB `app-debug.apk` from a clean clone.
-
-It has **not** been run on a device or emulator from here, so "builds" is the
-claim, not "plays". Installing it is the next step.
+The script applies `patches/*.patch` in order, adds Emerald Arena
+(`emerald-arena.sh`; `EMERALD_ARENA=0` to skip), generates the themes, and builds.
+`.github/workflows/pokeemerald-android.yml` runs it for both ABIs, runs the 64-bit
+crash test (`build-native64.sh`) and publishes the `latest` release.
 
 ## Fixes this harness applies on top of the fork
 
@@ -95,8 +82,4 @@ script asks make for precisely the files it needs.
 
 ## Legal
 
-Pokemon and Pokemon Emerald are trademarks of Nintendo, Creatures Inc. and
-GAME FREAK inc. This is an unofficial fan project, not affiliated with or
-endorsed by them. No game ROM or copyrighted asset is distributed here; the
-build produces an application from decompiled source, and you are responsible
-for how you use it.
+See the [top-level README](../README.md#legal).

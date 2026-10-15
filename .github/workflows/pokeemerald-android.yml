@@ -71,14 +71,34 @@ jobs:
       - name: Restore the signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
+          # build-info-<abi>.txt is published with the release, so the signing
+          # outcome can be checked without the job log (which the symbol dump
+          # used to overflow). It records whether each secret was visible and
+          # what happened -- never the secret values.
+          info=build-info-${{ matrix.abi }}.txt
+          {
+            echo "abi: ${{ matrix.abi }}"
+            echo "run: ${{ github.run_number }} (versionCode)"
+            echo "commit: ${{ github.sha }}"
+            echo "secret ANDROID_KEYSTORE_BASE64 visible: $([ -n "$KEYSTORE_BASE64" ] && echo yes || echo NO)"
+            echo "secret ANDROID_KEYSTORE_PASSWORD visible: $([ -n "$KEYSTORE_PASSWORD" ] && echo yes || echo NO)"
+          } > "$info"
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/pokeemerald.keystore"
-            echo "POKEEMERALD_KEYSTORE=$RUNNER_TEMP/pokeemerald.keystore" >> "$GITHUB_ENV"
-            echo "Signing with the permanent key."
+            # Tolerate the line breaks or spaces a paste can add.
+            if printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n\t' | base64 -d > "$RUNNER_TEMP/pokeemerald.keystore" 2>/dev/null \
+               && keytool -list -keystore "$RUNNER_TEMP/pokeemerald.keystore" -storepass "$KEYSTORE_PASSWORD" -alias pokeemerald >/dev/null 2>&1; then
+              echo "POKEEMERALD_KEYSTORE=$RUNNER_TEMP/pokeemerald.keystore" >> "$GITHUB_ENV"
+              echo "keystore: decoded and opened with the password" >> "$info"
+            else
+              echo "keystore: COULD NOT BE DECODED OR OPENED (check both secrets were pasted whole)" >> "$info"
+              echo "::warning title=Signing key unusable::The keystore secret did not decode or the password did not open it; falling back to a throwaway key."
+            fi
           else
-            echo "::warning title=No signing key::ANDROID_KEYSTORE_BASE64 is not set, so this APK is signed with a throwaway key and will not install over a previous build without uninstalling (which deletes the save). See android-build/SIGNING.md."
+            echo "::warning title=No signing key::ANDROID_KEYSTORE_BASE64 is not visible to this workflow, so this APK is signed with a throwaway key. See android-build/SIGNING.md."
           fi
+          cat "$info"
 
       - name: Build APK
         run: ./android-build/build-android.sh
@@ -90,14 +110,19 @@ jobs:
       - name: Show the signing certificate
         run: |
           apk=.pokeemerald-multiplatform/android/app/build/outputs/apk/debug/app-debug.apk
+          info=build-info-${{ matrix.abi }}.txt
           signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           "$signer" verify --print-certs "$apk" | grep -E "SHA-256|DN" | tee cert.txt
+          sed 's/^/apk /' cert.txt >> "$info"
           # The permanent key's fingerprint (android-build/SIGNING.md).
           if grep -qi "540da3c019869c153a3baa72880e46d05232a82deb36f6107d7dac5fc55aa4ad" cert.txt; then
-            echo "Permanent key: builds will install over each other."
+            echo "signed with: PERMANENT key (installs over previous permanent-key builds)" >> "$info"
           else
+            echo "signed with: throwaway key (will NOT install over a permanent-key build)" >> "$info"
             echo "::warning::Not the permanent key -- this build will not update an install signed with it."
           fi
+          cat "$info"
+          cp "$info" .pokeemerald-multiplatform/android/app/build/outputs/apk/debug/
 
       # NO_MATCHING_ABIS is an install-time failure with no build-time symptom:
       # the APK builds fine, it just carries native libraries for an ABI the
@@ -132,7 +157,7 @@ jobs:
       # storage is not reachable from every environment, so print the symbols
       # around main straight into the job log -- that is enough to turn
       # "main-7180" into a function name without downloading anything.
-      - name: Symbol window around main (for reading crash reports)
+      - name: Symbol table relative to main (for reading crash reports)
         if: success() && matrix.abi == 'arm64-v8a'
         run: |
           SO=$(find .pokeemerald-multiplatform/android/app/build/intermediates/cxx \
@@ -140,7 +165,10 @@ jobs:
           NM="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
           echo "library: $SO"
           "$NM" --defined-only "$SO" > /tmp/syms.txt
-          python3 - "$SO" <<'EOF'
+          # Written to a file published with the release (symbols-arm64-v8a.txt)
+          # rather than the job log: printed, its ~20,000 lines pushed every
+          # other step out of the log's 5,000-line window.
+          python3 - "$SO" > .pokeemerald-multiplatform/android/app/build/outputs/apk/debug/symbols-arm64-v8a.txt <<'EOF'
           import sys, re
           syms = []
           main = None
@@ -189,7 +217,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pokeemerald-debug-apk-${{ matrix.abi }}
-          path: .pokeemerald-multiplatform/android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            .pokeemerald-multiplatform/android/app/build/outputs/apk/debug/app-debug.apk
+            .pokeemerald-multiplatform/android/app/build/outputs/apk/debug/build-info-*.txt
+            .pokeemerald-multiplatform/android/app/build/outputs/apk/debug/symbols-*.txt
           if-no-files-found: error
 
       - name: Upload build logs on failure
@@ -255,7 +286,10 @@ jobs:
             src="apks/pokeemerald-debug-apk-$abi/app-debug.apk"
             [ -f "$src" ] || { echo "missing $src" >&2; exit 1; }
             cp "$src" "out/pokeemerald-$abi.apk"
+            cp apks/pokeemerald-debug-apk-$abi/build-info-*.txt out/ 2>/dev/null || true
+            cp apks/pokeemerald-debug-apk-$abi/symbols-*.txt out/ 2>/dev/null || true
           done
+          cat out/build-info-*.txt > out/build-info.txt
           ls -la out/
           sha256sum out/*.apk
 
@@ -297,4 +331,7 @@ jobs:
             and the story route plus random play -- including random wild
             battles and the arena -- runs without crashing. Not tested on a
             device by CI.
-          files: out/*.apk
+          files: |
+            out/*.apk
+            out/build-info.txt
+            out/symbols-*.txt

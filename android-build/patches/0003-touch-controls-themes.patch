@@ -335,7 +335,7 @@ index 000000000..f37a219e5
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-index 7f1cea0b5..e6c97b814 100644
+index 7f1cea0b5..2b598369e 100644
 --- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 @@ -1,188 +1,294 @@
@@ -756,7 +756,7 @@ index 7f1cea0b5..e6c97b814 100644
              Rect[] regions = {
                      new Rect(0, 0, getWidth(), gameY),
                      new Rect(0, gameY + gameHeight, getWidth(), getHeight()),
-@@ -192,46 +298,55 @@ public final class GbaControlsView extends View {
+@@ -192,46 +298,59 @@ public final class GbaControlsView extends View {
              for (Rect region : regions) {
                  int state = canvas.save();
                  canvas.clipRect(region);
@@ -766,9 +766,14 @@ index 7f1cea0b5..e6c97b814 100644
              }
          }
  
-         if (getPlatformSetting(4) != 0 && border != null) {
+-        if (getPlatformSetting(4) != 0 && border != null) {
 -            int innerWidth = gameWidth - 2;
 -            int innerHeight = gameHeight - 2;
++        // The fork's teal Border.png frame belongs to its two original
++        // backgrounds. The generated themes are composed without it and the
++        // handheld shells draw their own bezel, so it would sit on top of both.
++        if (getPlatformSetting(4) != 0 && border != null
++                && Themes.wantsBorderFrame(getBorderBackground()) && !shellActive()) {
 +            int innerWidth = gameWidth - 2, innerHeight = gameHeight - 2;
              canvas.drawBitmap(border, new Rect(141, 18, 1141, 701),
 -                    new Rect(
@@ -1865,10 +1870,10 @@ index 000000000..700e52c71
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
 new file mode 100644
-index 000000000..f31f9d029
+index 000000000..9ad4280fe
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,52 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/**
@@ -1908,6 +1913,11 @@ index 000000000..f31f9d029
 +        new Themes("Handheld Platinum", SHELL, 14),
 +        new Themes("Handheld Emerald", SHELL, 15),
 +    };
++
++    /** Whether the fork's Border.png frame is drawn: only on its own two backgrounds. */
++    public static boolean wantsBorderFrame(int background) {
++        return background == 0 || background == 1;
++    }
 +
 +    /** The theme whose background is the given BACKGROUND number, or -1 (custom/off). */
 +    public static int forBackground(int background) {
