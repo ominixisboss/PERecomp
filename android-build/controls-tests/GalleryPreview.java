@@ -75,6 +75,12 @@ public final class GalleryPreview {
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
             g.drawImage(bg, (ThemeCard.W - bw) / 2, (ThemeCard.H - bh) / 2, bw, bh, null);
         }
+        String frame = Themes.frameFor(t, new Settings());
+        if (frame != null && !Themes.FORK_FRAME.equals(frame)) {
+            ControlsLayout l = new ControlsLayout(ThemeCard.W, ThemeCard.H, new Settings(), false);
+            AwtFrames.draw(g, dir, frame, l.gameL, l.gameT, l.gameR, l.gameB,
+                    (l.gameR - l.gameL) / 240f, ThemeCard.W, ThemeCard.H);
+        }
         ThemeCard.drawOver(new AwtPainter(g), t);
         g.dispose();
         return img;

@@ -599,6 +599,67 @@ CATALOGUE = [
 ]
 
 
+# ---- border frames -------------------------------------------------------
+#
+# The game's own 20 text-window frames (Options > FRAME) as borders around the
+# game screen. Each is 3x3 tiles of 8px: corners, an edge tile the game
+# repeats, and the fill. Saved as a nine-slice the overlay scales by the
+# game's pixel size: the fill colour becomes transparent (the frame is drawn
+# outside the game, never over it), and inner rows that are only fill are
+# trimmed so the frame sits tight against the screen.
+#   FRAMEn.png: k x k corners, 8px edge pieces; size (2k + 8) square:
+#     [TL k*k][top 8*k][TR k*k] / [left k*8][  ][right k*8] / [BL][bottom][BR]
+
+def frame_slices(n, tint=None):
+    im = Image.open(f'graphics/text_window/{n}.png')
+    idx = im.load()
+    pal = im.getpalette()[:48]
+    pal = [tuple(pal[i:i + 3]) for i in range(0, 48, 3)]
+    centre = [idx[x, y] for y in range(8, 16) for x in range(8, 16)]
+    fill = max(set(centre), key=centre.count)
+    clear = {0, fill}
+    # inner rows of the top edge tile (bottom of tile 1,0) that are only fill
+    inset = 0
+    for y in range(7, -1, -1):
+        if all(idx[x, y] in clear for x in range(8, 16)):
+            inset += 1
+        else:
+            break
+    k = 8 - inset
+
+    def px(x, y):
+        v = idx[x, y]
+        if v in clear:
+            return (0, 0, 0, 0)
+        c = pal[v]
+        if tint:
+            lum = (c[0] * 299 + c[1] * 587 + c[2] * 114) // 1000
+            c = tuple(int(lo + (hi - lo) * lum / 255) for lo, hi in zip(*tint))
+        return c + (255,)
+
+    out = Image.new('RGBA', (2 * k + 8, 2 * k + 8), (0, 0, 0, 0))
+    op = out.load()
+    # source x/y spans for left/middle/right (and top/middle/bottom) bands
+    src = [(0, k), (8, 16), (16 + inset, 24)]
+    dst = [0, k, k + 8]
+    for row in range(3):
+        for col in range(3):
+            if row == 1 and col == 1:
+                continue
+            (x0, x1), (y0, y1) = src[col], src[row]
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    op[dst[col] + xx - x0, dst[row] + yy - y0] = px(xx, yy)
+    return out
+
+
+# Tinted variants, for themes no game frame's own colours suit:
+# (asset name, frame number, (dark colour, light colour)).
+TINTED_FRAMES = [
+    ('FRAME_dmg', 2, ((15, 56, 15), (155, 188, 15))),
+]
+
+
 def soften_original(path):
     """The fork's own two backgrounds (BG.png, BG1.png) are busy painted art
     with a bright moon and characters exactly where the buttons sit. Keep the
@@ -635,6 +696,11 @@ def main():
         fn().convert('RGB').save(OUT / f'BG{i}.png', optimize=True)
         print(f'BG{i}.png  {tid}')
     (OUT / 'themes-index.txt').write_text('\n'.join(index) + '\n')
+    for n in range(1, 21):
+        frame_slices(n).save(OUT / f'FRAME{n}.png', optimize=True)
+    for name, n, tint in TINTED_FRAMES:
+        frame_slices(n, tint).save(OUT / f'{name}.png', optimize=True)
+    print('FRAME1..20.png + %d tinted frames' % len(TINTED_FRAMES))
 
 
 if __name__ == '__main__':

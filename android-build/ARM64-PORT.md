@@ -906,3 +906,24 @@ gradient calls now set an opaque colour before the shader.
 Two related changes: handheld styles are no longer offered as button styles
 (they drew handheld buttons with no handheld body), and a handheld theme
 always uses its own buttons.
+
+## Border frames
+
+Each picture theme has a border frame around the game screen, taken from
+the game's own 20 text-window frames (`graphics/text_window/1..20.png`, the
+Options > FRAME choices). Each frame is 3x3 tiles of 8px. `make_themes.py`
+turns it into a nine-slice (`FRAMEn.png`):
+- the fill colour becomes transparent, because the frame is drawn outside the
+  game and never over it;
+- inner rows that are only fill are trimmed, so the frame sits tight against
+  the screen.
+
+`FrameSlices` places the corners and repeats the edge piece along each side,
+as the game repeats its window edge tile. It draws at the game's pixel scale,
+unfiltered, so the frame matches the game's pixels, and shrinks the frame if
+the margin around the screen is thinner. Tests check that no piece lands on
+the game screen or off the display, across shapes that include a tall
+tablet with no margin at all. Starfall and Open Sea keep the fork's teal
+`Border.png`, which their paintings were made for, and handhelds keep their
+bezel. The gear panel's **Border frame** setting can pick Match theme, Off,
+or any of the 20 frames.

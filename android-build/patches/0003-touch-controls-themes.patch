@@ -1,5 +1,5 @@
 diff --git a/android/app/build.gradle b/android/app/build.gradle
-index 8f443203c..05910f96e 100644
+index 8f443203c..7f785981b 100644
 --- a/android/app/build.gradle
 +++ b/android/app/build.gradle
 @@ -11,7 +11,10 @@ android {
@@ -46,6 +46,14 @@ index 8f443203c..05910f96e 100644
      externalNativeBuild {
          cmake {
              path file('src/main/cpp/CMakeLists.txt')
+@@ -42,6 +70,7 @@ tasks.register('copyBorderAsset', Sync) {
+     from(rootProject.file('..')) {
+         include 'BG*.png'
+         include 'Border.png'
++        include 'FRAME*.png'
+     }
+     into layout.buildDirectory.dir('generated/borderAssets')
+ }
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
 new file mode 100644
 index 000000000..9cf4f809e
@@ -137,10 +145,10 @@ index 000000000..9cf4f809e
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
 new file mode 100644
-index 000000000..deb2bc2c8
+index 000000000..1b2131373
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,257 @@
 +package com.pokeemerald.experimental;
 +
 +import android.app.AlertDialog;
@@ -208,6 +216,17 @@ index 000000000..deb2bc2c8
 +        col.addView(themeRow);
 +        Runnable showTheme = () -> themeName.setText(currentThemeName(view));
 +        showTheme.run();
++
++        // Border frame: the theme's own, none, or one of the game's 20
++        // window frames (Options > FRAME) for every theme.
++        List<String> frameNames = new ArrayList<>();
++        frameNames.add("Match theme");
++        frameNames.add("Off");
++        for (int i = 1; i <= Themes.GAME_FRAMES; i++) frameNames.add("Frame " + i);
++        Spinner frame = spinner(c, frameNames);
++        frame.setSelection(s.frame == Settings.FRAME_MATCH ? 0 : s.frame + 1, false);
++        header(col, c, "Border frame");
++        col.addView(frame);
 +
 +        // Button styles for picture themes: the flat ones only. A handheld is
 +        // a theme (its body and its buttons), picked in the gallery; offering
@@ -279,6 +298,13 @@ index 000000000..deb2bc2c8
 +
 +        // Every change applies immediately, so the result is visible behind the panel.
 +        browse.setOnClickListener(v -> ThemeGallery.show(view, showTheme));
++        frame.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
++            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
++                s.frame = pos == 0 ? Settings.FRAME_MATCH : pos - 1;
++                view.settingsChanged();
++            }
++            @Override public void onNothingSelected(AdapterView<?> p) {}
++        });
 +        style.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
 +            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
 +                s.style = styleIndex.get(pos);
@@ -381,10 +407,10 @@ index 000000000..deb2bc2c8
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-index 7f1cea0b5..356f5de67 100644
+index 7f1cea0b5..c29147d5e 100644
 --- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-@@ -1,188 +1,290 @@
+@@ -1,188 +1,291 @@
  package com.pokeemerald.experimental;
  
  import android.content.Context;
@@ -413,6 +439,7 @@ index 7f1cea0b5..356f5de67 100644
 +import com.pokeemerald.experimental.controls.ControlsAnimator;
 +import com.pokeemerald.experimental.controls.ControlsLayout;
 +import com.pokeemerald.experimental.controls.ControlsRenderer;
++import com.pokeemerald.experimental.controls.FrameSlices;
 +import com.pokeemerald.experimental.controls.Keys;
 +import com.pokeemerald.experimental.controls.Settings;
 +import com.pokeemerald.experimental.controls.Themes;
@@ -501,14 +528,28 @@ index 7f1cea0b5..356f5de67 100644
 +    void settingsChanged() {
 +        prefs.edit().putString(KEY, settings.serialize()).apply();
 +        rebuildLayout();
-     }
- 
--    private int unit() {
--        return Math.min(sideWidth() / 3, getHeight() / 8);
++    }
++
 +    void startEditing() {
 +        releaseAll();
 +        editing = true;
 +        rebuildLayout();
++    }
++
++    private void rebuildLayout() {
++        if (getWidth() > 0 && getHeight() > 0)
++            layout = new ControlsLayout(getWidth(), getHeight(), settings, editing);
++        invalidate();
+     }
+ 
+-    private int unit() {
+-        return Math.min(sideWidth() / 3, getHeight() / 8);
++    static boolean backgroundExists(Context c, int index) {
++        try (InputStream in = c.getAssets().open(index == 0 ? "BG.png" : "BG" + index + ".png")) {
++            return true;
++        } catch (IOException e) {
++            return false;
++        }
      }
  
 -    private RectF controlRect(int control) {
@@ -517,42 +558,6 @@ index 7f1cea0b5..356f5de67 100644
 -        int padX = side * 2 / 3;
 -        int padY = getHeight() * 7 / 10;
 -        int button = Math.min(side * 2 / 5, getHeight() / 6);
-+    private void rebuildLayout() {
-+        if (getWidth() > 0 && getHeight() > 0)
-+            layout = new ControlsLayout(getWidth(), getHeight(), settings, editing);
-+        invalidate();
-+    }
- 
--        switch (control) {
--        case UP:     return new RectF(padX - pad / 2f, padY - pad * 1.5f, padX + pad / 2f, padY - pad / 2f);
--        case DOWN:   return new RectF(padX - pad / 2f, padY + pad / 2f, padX + pad / 2f, padY + pad * 1.5f);
--        case LEFT:   return new RectF(padX - pad * 1.5f, padY - pad / 2f, padX - pad / 2f, padY + pad / 2f);
--        case RIGHT:  return new RectF(padX + pad / 2f, padY - pad / 2f, padX + pad * 1.5f, padY + pad / 2f);
--        case A:      return new RectF(getWidth() - side / 4f - button, getHeight() * .58f,
--                                      getWidth() - side / 4f, getHeight() * .58f + button);
--        case B:      return new RectF(getWidth() - side + side / 4f, getHeight() * .76f,
--                                      getWidth() - side + side / 4f + button, getHeight() * .76f + button);
--        case SELECT: return new RectF(side / 10f, getHeight() * .25f, side * .9f, getHeight() * .35f);
--        case START:  return new RectF(getWidth() - side * .9f, getHeight() * .25f,
--                                      getWidth() - side * .1f, getHeight() * .35f);
--        case L:      return new RectF(side / 10f, getHeight() * .05f, side * .9f, getHeight() * .15f);
--        case R:      return new RectF(getWidth() - side * .9f, getHeight() * .05f,
--                                      getWidth() - side * .1f, getHeight() * .15f);
--        default:     return new RectF();
-+    static boolean backgroundExists(Context c, int index) {
-+        try (InputStream in = c.getAssets().open(index == 0 ? "BG.png" : "BG" + index + ".png")) {
-+            return true;
-+        } catch (IOException e) {
-+            return false;
-         }
-     }
- 
--    private int controlsAt(float x, float y) {
--        int result = 0;
--        int[] controls = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
--        for (int control : controls) {
--            if (controlRect(control).contains(x, y)) {
--                result |= control;
 +    // ---- touch ------------------------------------------------------------
 +
 +    @Override
@@ -585,7 +590,23 @@ index 7f1cea0b5..356f5de67 100644
 +        } else {
 +            onPlayTouch(event, up ? index : -1);
 +        }
-+
+ 
+-        switch (control) {
+-        case UP:     return new RectF(padX - pad / 2f, padY - pad * 1.5f, padX + pad / 2f, padY - pad / 2f);
+-        case DOWN:   return new RectF(padX - pad / 2f, padY + pad / 2f, padX + pad / 2f, padY + pad * 1.5f);
+-        case LEFT:   return new RectF(padX - pad * 1.5f, padY - pad / 2f, padX - pad / 2f, padY + pad / 2f);
+-        case RIGHT:  return new RectF(padX + pad / 2f, padY - pad / 2f, padX + pad * 1.5f, padY + pad / 2f);
+-        case A:      return new RectF(getWidth() - side / 4f - button, getHeight() * .58f,
+-                                      getWidth() - side / 4f, getHeight() * .58f + button);
+-        case B:      return new RectF(getWidth() - side + side / 4f, getHeight() * .76f,
+-                                      getWidth() - side + side / 4f + button, getHeight() * .76f + button);
+-        case SELECT: return new RectF(side / 10f, getHeight() * .25f, side * .9f, getHeight() * .35f);
+-        case START:  return new RectF(getWidth() - side * .9f, getHeight() * .25f,
+-                                      getWidth() - side * .1f, getHeight() * .35f);
+-        case L:      return new RectF(side / 10f, getHeight() * .05f, side * .9f, getHeight() * .15f);
+-        case R:      return new RectF(getWidth() - side * .9f, getHeight() * .05f,
+-                                      getWidth() - side * .1f, getHeight() * .15f);
+-        default:     return new RectF();
 +        if (up) {
 +            Finger f = fingers.get(id);
 +            fingers.remove(id);
@@ -594,10 +615,16 @@ index 7f1cea0b5..356f5de67 100644
 +                if (gear != null && layout.itemAt(event.getX(index), event.getY(index)) == gear)
 +                    ControlsSettingsDialog.show(this);
 +            }
-+        }
+         }
 +        return true;
-+    }
-+
+     }
+ 
+-    private int controlsAt(float x, float y) {
+-        int result = 0;
+-        int[] controls = {A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L};
+-        for (int control : controls) {
+-            if (controlRect(control).contains(x, y)) {
+-                result |= control;
 +    private void onPlayTouch(MotionEvent event, int releasedIndex) {
 +        int next = 0;
 +        for (int i = 0; i < event.getPointerCount(); i++) {
@@ -799,7 +826,7 @@ index 7f1cea0b5..356f5de67 100644
              Rect[] regions = {
                      new Rect(0, 0, getWidth(), gameY),
                      new Rect(0, gameY + gameHeight, getWidth(), getHeight()),
-@@ -192,46 +294,63 @@ public final class GbaControlsView extends View {
+@@ -192,46 +295,99 @@ public final class GbaControlsView extends View {
              for (Rect region : regions) {
                  int state = canvas.save();
                  canvas.clipRect(region);
@@ -812,23 +839,61 @@ index 7f1cea0b5..356f5de67 100644
 -        if (getPlatformSetting(4) != 0 && border != null) {
 -            int innerWidth = gameWidth - 2;
 -            int innerHeight = gameHeight - 2;
-+        // The fork's teal Border.png frame belongs to its two original
-+        // backgrounds. The generated themes are composed without it and the
-+        // handheld shells draw their own bezel, so it would sit on top of both.
-+        if (getPlatformSetting(4) != 0 && border != null
-+                && Themes.wantsBorderFrame(getBorderBackground()) && !shellActive()) {
-+            int innerWidth = gameWidth - 2, innerHeight = gameHeight - 2;
-             canvas.drawBitmap(border, new Rect(141, 18, 1141, 701),
+-            canvas.drawBitmap(border, new Rect(141, 18, 1141, 701),
 -                    new Rect(
 -                            gameX + 1 - innerWidth * 19 / 961,
 -                            gameY + 1 - innerHeight * 20 / 643,
 -                            gameX + 1 + innerWidth + innerWidth * 20 / 961,
 -                            gameY + 1 + innerHeight + innerHeight * 20 / 643),
-+                    new Rect(gameX + 1 - innerWidth * 19 / 961,
-+                             gameY + 1 - innerHeight * 20 / 643,
-+                             gameX + 1 + innerWidth + innerWidth * 20 / 961,
-+                             gameY + 1 + innerHeight + innerHeight * 20 / 643),
-                     borderPaint);
+-                    borderPaint);
++        // The border frame around the screen: the theme's own (one of the
++        // game's window frames), the player's choice, or the fork's teal
++        // Border.png on the two paintings it was made for. Handhelds draw
++        // their own bezel.
++        int theme = Themes.forBackground(getBorderBackground());
++        String frame = shellActive() ? null : Themes.frameFor(theme < 0 ? null : Themes.ALL[theme], settings);
++        if (Themes.FORK_FRAME.equals(frame)) {
++            if (getPlatformSetting(4) != 0 && border != null) {
++                int innerWidth = gameWidth - 2, innerHeight = gameHeight - 2;
++                canvas.drawBitmap(border, new Rect(141, 18, 1141, 701),
++                        new Rect(gameX + 1 - innerWidth * 19 / 961,
++                                 gameY + 1 - innerHeight * 20 / 643,
++                                 gameX + 1 + innerWidth + innerWidth * 20 / 961,
++                                 gameY + 1 + innerHeight + innerHeight * 20 / 643),
++                        borderPaint);
++            }
++        } else if (frame != null) {
++            drawFrame(canvas, getContext(), frame, gameX, gameY, gameX + gameWidth, gameY + gameHeight,
++                    scale, getWidth(), getHeight());
++        }
++    }
++
++    private static final java.util.Map<String, Bitmap> frames = new java.util.HashMap<>();
++    private static final Paint framePaint = new Paint();   // no filtering: crisp game pixels
++
++    /** A border frame (FRAMEn.png) around the game screen; also used by the theme gallery. */
++    static void drawFrame(Canvas canvas, Context c, String name, int gl, int gt, int gr, int gb,
++                          float scale, int width, int height) {
++        Bitmap img;
++        synchronized (frames) {
++            if (!frames.containsKey(name)) {
++                Bitmap b = null;
++                try (InputStream in = c.getAssets().open(name + ".png")) {
++                    b = BitmapFactory.decodeStream(in);
++                } catch (IOException ignored) {
++                    // not packaged: no frame
++                }
++                frames.put(name, b);
++            }
++            img = frames.get(name);
++        }
++        if (img == null) return;
++        android.graphics.RectF dst = new android.graphics.RectF();
++        Rect src = new Rect();
++        for (FrameSlices.Piece p : FrameSlices.place(img.getWidth(), gl, gt, gr, gb, scale, width, height)) {
++            src.set(p.sx, p.sy, p.sx + p.sw, p.sy + p.sh);
++            dst.set(p.l, p.t, p.r, p.b);
++            canvas.drawBitmap(img, src, dst, framePaint);
          }
      }
  
@@ -1114,10 +1179,10 @@ index 000000000..690d37e72
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ThemeGallery.java b/android/app/src/main/java/com/pokeemerald/experimental/ThemeGallery.java
 new file mode 100644
-index 000000000..d0370503b
+index 000000000..347bfe4c6
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/ThemeGallery.java
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,308 @@
 +package com.pokeemerald.experimental;
 +
 +import android.app.Dialog;
@@ -1152,6 +1217,8 @@ index 000000000..d0370503b
 +import java.util.concurrent.ExecutorService;
 +import java.util.concurrent.Executors;
 +
++import com.pokeemerald.experimental.controls.ControlsLayout;
++import com.pokeemerald.experimental.controls.Settings;
 +import com.pokeemerald.experimental.controls.ThemeCard;
 +import com.pokeemerald.experimental.controls.Themes;
 +
@@ -1336,15 +1403,19 @@ index 000000000..d0370503b
 +            card.addView(name);
 +            card.setOnClickListener(v -> apply(id));
 +
-+            Bitmap cached = cache.get(id);
++            // the frame follows the player's frame setting, so it is part of the key
++            Themes th = i >= 0 ? Themes.ALL[i] : null;
++            String frame = Themes.frameFor(th, view.settings());
++            String key = id + "|" + frame;
++            Bitmap cached = cache.get(key);
 +            if (cached != null) {
 +                image.setImageBitmap(cached);
 +            } else {
 +                Context app = c.getApplicationContext();
 +                worker.execute(() -> {
-+                    Bitmap b = render(app, id);
++                    Bitmap b = render(app, id, frame);
 +                    if (b == null) return;
-+                    cache.put(id, b);
++                    cache.put(key, b);
 +                    main.post(() -> image.setImageBitmap(b));
 +                });
 +            }
@@ -1365,7 +1436,7 @@ index 000000000..d0370503b
 +    }
 +
 +    /** One card's picture, off the main thread. */
-+    private static Bitmap render(Context c, String id) {
++    private static Bitmap render(Context c, String id, String frame) {
 +        int i = Themes.indexOf(id);
 +        Themes t = i >= 0 ? Themes.ALL[i] : null;
 +        Bitmap out = Bitmap.createBitmap(THUMB_W, THUMB_H, Bitmap.Config.ARGB_8888);
@@ -1388,6 +1459,11 @@ index 000000000..d0370503b
 +            } catch (IOException ignored) {
 +                // no picture: the card shows black around the screen
 +            }
++        }
++        if (frame != null && !Themes.FORK_FRAME.equals(frame)) {
++            ControlsLayout l = new ControlsLayout(ThemeCard.W, ThemeCard.H, new Settings(), false);
++            GbaControlsView.drawFrame(canvas, c, frame, l.gameL, l.gameT, l.gameR, l.gameB,
++                    (l.gameR - l.gameL) / 240f, ThemeCard.W, ThemeCard.H);
 +        }
 +        ThemeCard.drawOver(new CanvasPainter().on(canvas), t);
 +        return out;
@@ -2164,6 +2240,75 @@ index 000000000..744af6a2d
 +        }
 +    }
 +}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/FrameSlices.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/FrameSlices.java
+new file mode 100644
+index 000000000..893771f63
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/FrameSlices.java
+@@ -0,0 +1,63 @@
++package com.pokeemerald.experimental.controls;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Where a border frame's pieces go. A frame image (FRAMEn.png, made by
++ * make_themes.py from the game's own window frames) is a nine-slice of size
++ * 2k+8: k x k corners and 8px edge pieces, which are repeated along each side,
++ * as the game repeats its window edge tile. The frame is drawn around the
++ * game screen at the game's pixel size, shrunk if the margin around the
++ * screen is thinner than that, and never over the screen itself.
++ * Pure Java: the Android overlay and the desktop previews draw the same rects.
++ */
++public final class FrameSlices {
++    private FrameSlices() {}
++
++    /** One piece: source rect in the frame image, destination on screen. */
++    public static final class Piece {
++        public final int sx, sy, sw, sh;
++        public final float l, t, r, b;
++        Piece(int sx, int sy, int sw, int sh, float l, float t, float r, float b) {
++            this.sx = sx; this.sy = sy; this.sw = sw; this.sh = sh;
++            this.l = l; this.t = t; this.r = r; this.b = b;
++        }
++    }
++
++    /**
++     * imageSize is the frame image's width (= height). The game screen is
++     * (gl, gt)-(gr, gb), drawn at gameScale screen pixels per game pixel, on a
++     * screen of width x height.
++     */
++    public static List<Piece> place(int imageSize, int gl, int gt, int gr, int gb,
++                                    float gameScale, int width, int height) {
++        List<Piece> out = new ArrayList<>();
++        int k = (imageSize - 8) / 2;
++        if (k <= 0) return out;
++        float margin = Math.min(Math.min(gl, gt), Math.min(width - gr, height - gb));
++        float s = Math.min(gameScale, margin / k);
++        if (s * k < 2) return out;              // no room for a frame worth drawing
++        float t = k * s;
++        // corners
++        out.add(new Piece(0, 0, k, k, gl - t, gt - t, gl, gt));
++        out.add(new Piece(k + 8, 0, k, k, gr, gt - t, gr + t, gt));
++        out.add(new Piece(0, k + 8, k, k, gl - t, gb, gl, gb + t));
++        out.add(new Piece(k + 8, k + 8, k, k, gr, gb, gr + t, gb + t));
++        // edges: the 8px piece repeated, the last one cut to fit
++        float unit = 8 * s;
++        for (float x = gl; x < gr - 0.01f; x += unit) {
++            float x1 = Math.min(gr, x + unit);
++            int sw = Math.max(1, Math.round((x1 - x) / s));
++            out.add(new Piece(k, 0, sw, k, x, gt - t, x1, gt));
++            out.add(new Piece(k, k + 8, sw, k, x, gb, x1, gb + t));
++        }
++        for (float y = gt; y < gb - 0.01f; y += unit) {
++            float y1 = Math.min(gb, y + unit);
++            int sh = Math.max(1, Math.round((y1 - y) / s));
++            out.add(new Piece(0, k, k, sh, gl - t, y, gl, y1));
++            out.add(new Piece(k + 8, k, k, sh, gr, y, gr + t, y1));
++        }
++        return out;
++    }
++}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Keys.java
 new file mode 100644
 index 000000000..3be686700
@@ -2224,10 +2369,10 @@ index 000000000..9018e9e30
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
 new file mode 100644
-index 000000000..51402fe03
+index 000000000..7fc18d619
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,89 @@
 +package com.pokeemerald.experimental.controls;
 +
 +import java.util.HashMap;
@@ -2251,6 +2396,10 @@ index 000000000..51402fe03
 +     *  Stored by the theme's id, so reordering the catalogue never changes
 +     *  which shell a player had chosen. */
 +    public int shellTheme = -1;
++    /** Border frame: FRAME_MATCH (the theme's own), FRAME_OFF, or 1..20,
++     *  one of the game's window frames for every theme. */
++    public int frame = FRAME_MATCH;
++    public static final int FRAME_MATCH = -1, FRAME_OFF = 0;
 +    /** Moved controls: id -> {x, y} as fractions of the view size. */
 +    public final Map<String, float[]> positions = new HashMap<>();
 +
@@ -2261,6 +2410,7 @@ index 000000000..51402fe03
 +        s.append("v=1;style=").append(style).append(";opacity=").append(opacity)
 +         .append(";scale=").append(scale).append(";haptics=").append(haptics ? 1 : 0)
 +         .append(";arena=").append(arenaButtons ? 1 : 0).append(";diag=").append(diagonals ? 1 : 0)
++         .append(";frame=").append(frame)
 +         .append(";shellId=").append(shellTheme >= 0 ? Themes.ALL[shellTheme].id : "");
 +        for (Map.Entry<String, float[]> e : positions.entrySet())
 +            s.append(";pos.").append(e.getKey()).append('=').append(e.getValue()[0]).append(',').append(e.getValue()[1]);
@@ -2284,6 +2434,7 @@ index 000000000..51402fe03
 +                case "arena":   s.arenaButtons = !v.equals("0"); break;
 +                case "diag":    s.diagonals = !v.equals("0"); break;
 +                case "shellId": s.shellTheme = Themes.indexOf(v); break;
++                case "frame":   s.frame = Integer.parseInt(v); break;
 +                case "shell": {  // before ids: an index into the old, uncategorised list
 +                    int old = Integer.parseInt(v) - Themes.LEGACY_FIRST_SHELL;
 +                    s.shellTheme = old >= 0 && old < Themes.LEGACY_SHELLS.length
@@ -2305,6 +2456,7 @@ index 000000000..51402fe03
 +        // theme now (older versions let one be picked as a button style).
 +        if (s.style < MATCH_THEME || s.style >= ButtonStyle.ALL.length
 +                || (s.style >= 0 && ButtonStyle.ALL[s.style].gba)) s.style = MATCH_THEME;
++        if (s.frame < FRAME_MATCH || s.frame > Themes.GAME_FRAMES) s.frame = FRAME_MATCH;
 +        if (s.shellTheme < 0 || s.shellTheme >= Themes.ALL.length || !Themes.ALL[s.shellTheme].isShell())
 +            s.shellTheme = -1;
 +        return s;
@@ -2344,10 +2496,10 @@ index 000000000..d078109d4
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
 new file mode 100644
-index 000000000..4c4d0c97a
+index 000000000..aeb9d2dc1
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,156 @@
 +package com.pokeemerald.experimental.controls;
 +
 +import java.util.ArrayList;
@@ -2367,10 +2519,27 @@ index 000000000..4c4d0c97a
 +public final class Themes {
 +    public final String id, name, category;
 +    public final int background, style;
++    /** The border frame drawn around the game screen: a frame image name
++     *  (FRAMEn = the game's own window frame n), FORK_FRAME, or null. */
++    public final String frame;
 +
-+    private Themes(String id, String name, String category, int background, int style) {
++    private Themes(String id, String name, String category, int background, int style, String frame) {
 +        this.id = id; this.name = name; this.category = category;
-+        this.background = background; this.style = style;
++        this.background = background; this.style = style; this.frame = frame;
++    }
++
++    /** The fork's own teal Border.png, which its two paintings were made for. */
++    public static final String FORK_FRAME = "Border";
++
++    /** The game has 20 window frames (Options > FRAME); FRAME1..20.png. */
++    public static final int GAME_FRAMES = 20;
++
++    /** The frame to draw for a theme under the player's frame setting, or
++     *  null. Handhelds draw their own bezel instead. */
++    public static String frameFor(Themes theme, Settings s) {
++        if (theme == null || theme.isShell() || s.frame == Settings.FRAME_OFF) return null;
++        if (s.frame > 0) return "FRAME" + s.frame;
++        return theme.frame;
 +    }
 +
 +    /** background value for a handheld shell: the overlay draws it, no image. */
@@ -2388,12 +2557,12 @@ index 000000000..4c4d0c97a
 +    private static final int CLASSIC_ST = 0, GBA_SP = 1, FAMICOM = 2, EMERALD = 4, MAGMA = 5,
 +            AQUA = 6, RETRO = 7, SAND = 16, SKY = 17, ROSE = 18, NIGHT = 19, DEX = 20;
 +
-+    private static Themes t(String id, String name, String cat, int bg, int style) {
-+        return new Themes(id, name, cat, bg, style);
++    private static Themes t(String id, String name, String cat, int bg, int style, String frame) {
++        return new Themes(id, name, cat, bg, style, frame);
 +    }
 +
 +    private static Themes shell(String id, String name, int style) {
-+        return new Themes(id, name, HANDHELDS, SHELL, style);
++        return new Themes(id, name, HANDHELDS, SHELL, style, null);
 +    }
 +
 +    public static final Themes[] ALL = {
@@ -2410,55 +2579,55 @@ index 000000000..4c4d0c97a
 +        shell("handheld_gold", "Gold", 23),
 +        shell("handheld_atomic", "Atomic Purple", 24),
 +
-+        t("rayquaza_sky", "Rayquaza Sky", HOENN, 2, EMERALD),
-+        t("hoenn_sunset", "Hoenn Sunset", HOENN, 3, AQUA),
-+        t("magma", "Magma", HOENN, 4, MAGMA),
-+        t("starter_meadow", "Starter Meadow", HOENN, 5, EMERALD),
-+        t("eon_night", "Eon Night", HOENN, 6, NIGHT),
-+        t("primal_clash", "Primal Clash", HOENN, 9, MAGMA),
-+        t("sealed_chamber", "Sealed Chamber", HOENN, 10, SAND),
-+        t("sootopolis", "Sootopolis", HOENN, 11, AQUA),
-+        t("meteor_falls", "Meteor Falls", HOENN, 12, NIGHT),
-+        t("contest_hall", "Contest Hall", HOENN, 13, ROSE),
++        t("rayquaza_sky", "Rayquaza Sky", HOENN, 2, EMERALD, "FRAME6"),
++        t("hoenn_sunset", "Hoenn Sunset", HOENN, 3, AQUA, "FRAME20"),
++        t("magma", "Magma", HOENN, 4, MAGMA, "FRAME7"),
++        t("starter_meadow", "Starter Meadow", HOENN, 5, EMERALD, "FRAME19"),
++        t("eon_night", "Eon Night", HOENN, 6, NIGHT, "FRAME12"),
++        t("primal_clash", "Primal Clash", HOENN, 9, MAGMA, "FRAME16"),
++        t("sealed_chamber", "Sealed Chamber", HOENN, 10, SAND, "FRAME14"),
++        t("sootopolis", "Sootopolis", HOENN, 11, AQUA, "FRAME13"),
++        t("meteor_falls", "Meteor Falls", HOENN, 12, NIGHT, "FRAME11"),
++        t("contest_hall", "Contest Hall", HOENN, 13, ROSE, "FRAME8"),
 +
-+        t("rain", "Rain", WEATHER, 14, GBA_SP),
-+        t("snowfall", "Snowfall", WEATHER, 15, SKY),
-+        t("volcanic_ash", "Volcanic Ash", WEATHER, 16, MAGMA),
-+        t("sandstorm", "Sandstorm", WEATHER, 17, SAND),
-+        t("fog", "Fog", WEATHER, 18, GBA_SP),
-+        t("harsh_sun", "Harsh Sun", WEATHER, 19, SAND),
-+        t("underwater", "Underwater", WEATHER, 20, AQUA),
++        t("rain", "Rain", WEATHER, 14, GBA_SP, "FRAME4"),
++        t("snowfall", "Snowfall", WEATHER, 15, SKY, "FRAME9"),
++        t("volcanic_ash", "Volcanic Ash", WEATHER, 16, MAGMA, "FRAME17"),
++        t("sandstorm", "Sandstorm", WEATHER, 17, SAND, "FRAME14"),
++        t("fog", "Fog", WEATHER, 18, GBA_SP, "FRAME15"),
++        t("harsh_sun", "Harsh Sun", WEATHER, 19, SAND, "FRAME18"),
++        t("underwater", "Underwater", WEATHER, 20, AQUA, "FRAME13"),
 +
-+        t("box_forest", "Forest", PC_BOX, 21, EMERALD),
-+        t("box_city", "City", PC_BOX, 22, ROSE),
-+        t("box_desert", "Desert", PC_BOX, 23, SAND),
-+        t("box_savanna", "Savanna", PC_BOX, 24, EMERALD),
-+        t("box_crag", "Crag", PC_BOX, 25, GBA_SP),
-+        t("box_volcano", "Volcano", PC_BOX, 26, MAGMA),
-+        t("box_snow", "Snow", PC_BOX, 27, SKY),
-+        t("box_cave", "Cave", PC_BOX, 28, SAND),
-+        t("box_beach", "Beach", PC_BOX, 29, AQUA),
-+        t("box_seafloor", "Seafloor", PC_BOX, 30, AQUA),
-+        t("box_river", "River", PC_BOX, 31, SKY),
-+        t("box_sky", "Sky", PC_BOX, 32, SKY),
-+        t("box_polkadot", "Polka Dot", PC_BOX, 33, AQUA),
-+        t("box_pokecenter", "Pokémon Center", PC_BOX, 34, DEX),
-+        t("box_machine", "Machine", PC_BOX, 35, GBA_SP),
++        t("box_forest", "Forest", PC_BOX, 21, EMERALD, "FRAME19"),
++        t("box_city", "City", PC_BOX, 22, ROSE, "FRAME2"),
++        t("box_desert", "Desert", PC_BOX, 23, SAND, "FRAME14"),
++        t("box_savanna", "Savanna", PC_BOX, 24, EMERALD, "FRAME10"),
++        t("box_crag", "Crag", PC_BOX, 25, GBA_SP, "FRAME17"),
++        t("box_volcano", "Volcano", PC_BOX, 26, MAGMA, "FRAME7"),
++        t("box_snow", "Snow", PC_BOX, 27, SKY, "FRAME9"),
++        t("box_cave", "Cave", PC_BOX, 28, SAND, "FRAME10"),
++        t("box_beach", "Beach", PC_BOX, 29, AQUA, "FRAME18"),
++        t("box_seafloor", "Seafloor", PC_BOX, 30, AQUA, "FRAME13"),
++        t("box_river", "River", PC_BOX, 31, SKY, "FRAME6"),
++        t("box_sky", "Sky", PC_BOX, 32, SKY, "FRAME9"),
++        t("box_polkadot", "Polka Dot", PC_BOX, 33, AQUA, "FRAME20"),
++        t("box_pokecenter", "Pokémon Center", PC_BOX, 34, DEX, "FRAME3"),
++        t("box_machine", "Machine", PC_BOX, 35, GBA_SP, "FRAME4"),
 +
-+        t("pal_pikachu", "Pikachu", PALS, 36, FAMICOM),
-+        t("pal_zigzagoon", "Zigzagoon", PALS, 37, SKY),
-+        t("pal_azumarill", "Azumarill", PALS, 38, AQUA),
-+        t("pal_ludicolo", "Ludicolo", PALS, 39, EMERALD),
++        t("pal_pikachu", "Pikachu", PALS, 36, FAMICOM, "FRAME18"),
++        t("pal_zigzagoon", "Zigzagoon", PALS, 37, SKY, "FRAME10"),
++        t("pal_azumarill", "Azumarill", PALS, 38, AQUA, "FRAME9"),
++        t("pal_ludicolo", "Ludicolo", PALS, 39, EMERALD, "FRAME19"),
 +
-+        t("starfall", "Starfall", CLASSIC, 0, CLASSIC_ST),
-+        t("open_sea", "Open Sea", CLASSIC, 1, AQUA),
-+        t("gba_indigo", "GBA Indigo", CLASSIC, 7, GBA_SP),
-+        t("classic_green", "Classic Green", CLASSIC, 8, RETRO),
-+        t("pocket", "Pocket", CLASSIC, 40, GBA_SP),
++        t("starfall", "Starfall", CLASSIC, 0, CLASSIC_ST, FORK_FRAME),
++        t("open_sea", "Open Sea", CLASSIC, 1, AQUA, FORK_FRAME),
++        t("gba_indigo", "GBA Indigo", CLASSIC, 7, GBA_SP, "FRAME1"),
++        t("classic_green", "Classic Green", CLASSIC, 8, RETRO, "FRAME_dmg"),
++        t("pocket", "Pocket", CLASSIC, 40, GBA_SP, "FRAME2"),
 +
-+        t("midnight", "Midnight", MINIMAL, 41, NIGHT),
-+        t("slate", "Slate", MINIMAL, 42, GBA_SP),
-+        t("paper", "Paper", MINIMAL, 43, FAMICOM),
++        t("midnight", "Midnight", MINIMAL, 41, NIGHT, "FRAME1"),
++        t("slate", "Slate", MINIMAL, 42, GBA_SP, "FRAME4"),
++        t("paper", "Paper", MINIMAL, 43, FAMICOM, "FRAME2"),
 +    };
 +
 +    /** Shell theme ids in the order the old settings stored them (index 9..16
@@ -2466,11 +2635,6 @@ index 000000000..4c4d0c97a
 +    static final String[] LEGACY_SHELLS = {"handheld_indigo", "handheld_glacier", "handheld_fuchsia",
 +            "handheld_arctic", "handheld_black", "handheld_spice", "handheld_platinum", "handheld_emerald"};
 +    static final int LEGACY_FIRST_SHELL = 9;
-+
-+    /** Whether the fork's Border.png frame is drawn: only on its own two backgrounds. */
-+    public static boolean wantsBorderFrame(int background) {
-+        return background == 0 || background == 1;
-+    }
 +
 +    /** The theme whose background is the given BACKGROUND number, or -1 (custom/off). */
 +    public static int forBackground(int background) {

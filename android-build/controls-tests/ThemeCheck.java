@@ -135,6 +135,19 @@ public final class ThemeCheck {
                 failures++;
             }
         }
+        // Every frame a theme or the frame setting can pick is generated.
+        java.util.Set<String> frameNames = new java.util.TreeSet<>();
+        for (int n = 1; n <= Themes.GAME_FRAMES; n++) frameNames.add("FRAME" + n);
+        for (Themes th : Themes.ALL) if (th.frame != null) frameNames.add(th.frame);
+        for (String name : frameNames) {
+            File f = new File(a[0], name + ".png");
+            if (!f.isFile()) { System.out.println("MISSING frame " + f); failures++; continue; }
+            int w = ImageIO.read(f).getWidth();
+            if (!name.equals(Themes.FORK_FRAME) && (w < 10 || (w - 8) % 2 != 0)) {
+                System.out.println("BAD frame " + f + ": not a nine-slice (width " + w + ")");
+                failures++;
+            }
+        }
         for (Themes th : Themes.ALL) {
             if (th.isShell()) continue;
             File f = new File(a[0], th.background == 0 ? "BG.png" : "BG" + th.background + ".png");

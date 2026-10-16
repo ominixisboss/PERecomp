@@ -31,18 +31,24 @@ public final class Preview {
         int gs = Math.max(1, Math.min(w / 240, h / 160));
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         g.drawImage(game, (w - 240 * gs) / 2, (h - 160 * gs) / 2, 240 * gs, 160 * gs, null);
-        // The fork's Border.png frame, exactly where and when the phone draws
-        // it (GbaControlsView.drawBorder), so previews match the device.
+        // The border frame, exactly where and when the phone draws it
+        // (GbaControlsView.drawBorder). -Dframe=n picks a game frame, 0 none.
         String bgName = new File(a[0]).getName();
         int bgIndex = bgName.equals("BG.png") ? 0 : bgName.matches("BG\\d+\\.png") ? Integer.parseInt(bgName.replaceAll("\\D", "")) : -1;
-        File borderPng = new File(new File(a[0]).getParentFile() == null ? new File(".") : new File(a[0]).getParentFile(), "Border.png");
-        if (bgIndex >= 0 && Themes.wantsBorderFrame(bgIndex) && borderPng.isFile()) {
-            BufferedImage border = ImageIO.read(borderPng);
-            int iw = 240 * gs - 2, ih = 160 * gs - 2, gx = (w - 240 * gs) / 2, gy = (h - 160 * gs) / 2;
+        File dir = new File(a[0]).getParentFile() == null ? new File(".") : new File(a[0]).getParentFile();
+        if (System.getProperty("frame") != null) s.frame = Integer.parseInt(System.getProperty("frame"));
+        int themeIndex = bgIndex < 0 ? -1 : Themes.forBackground(bgIndex);
+        String frame = Themes.frameFor(themeIndex < 0 ? null : Themes.ALL[themeIndex], s);
+        int gx = (w - 240 * gs) / 2, gy = (h - 160 * gs) / 2;
+        if (Themes.FORK_FRAME.equals(frame) && new File(dir, "Border.png").isFile()) {
+            BufferedImage border = ImageIO.read(new File(dir, "Border.png"));
+            int iw = 240 * gs - 2, ih = 160 * gs - 2;
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
             int dx1 = gx + 1 - iw * 19 / 961, dy1 = gy + 1 - ih * 20 / 643;
             int dx2 = gx + 1 + iw + iw * 20 / 961, dy2 = gy + 1 + ih + ih * 20 / 643;
             g.drawImage(border, dx1, dy1, dx2, dy2, 141, 18, 1141, 701, null);
+        } else if (frame != null) {
+            AwtFrames.draw(g, dir, frame, gx, gy, gx + 240 * gs, gy + 160 * gs, gs, w, h);
         }
         int style = Integer.parseInt(a[2]);
         ControlsLayout lay = new ControlsLayout(w, h, s, edit);

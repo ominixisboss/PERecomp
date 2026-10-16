@@ -118,6 +118,32 @@ public final class ControlsTest {
         check(Settings.parse("style=21").style == Settings.MATCH_THEME, "new handheld button style is not kept");
         check(Settings.parse("style=16").style == 16, "a flat style is kept");
 
+        // ---- border frames ----
+        Settings fs = new Settings(); fs.frame = 7;
+        check(Settings.parse(fs.serialize()).frame == 7, "frame setting round trip");
+        check(Settings.parse("frame=99").frame == Settings.FRAME_MATCH, "out-of-range frame clamps to match");
+        Themes magma = Themes.ALL[Themes.indexOf("magma")];
+        check("FRAME7".equals(Themes.frameFor(magma, new Settings())), "theme's own frame by default");
+        check("FRAME3".equals(Themes.frameFor(magma, Settings.parse("frame=3"))), "chosen frame overrides");
+        check(Themes.frameFor(magma, Settings.parse("frame=0")) == null, "frame off");
+        check(Themes.frameFor(Themes.ALL[Themes.indexOf("handheld_gold")], Settings.parse("frame=3")) == null,
+                "handhelds never get a frame (they have a bezel)");
+        // A frame sits outside the game screen and inside the display, on any
+        // shape, including a tall one with almost no margin around the screen.
+        for (int[] size : new int[][] {{2404, 1080}, {2400, 1080}, {1920, 1080}, {1280, 720}, {2560, 1600}, {1200, 540}, {960, 640}}) {
+            ControlsLayout fl = new ControlsLayout(size[0], size[1], new Settings(), false);
+            float gs = (fl.gameR - fl.gameL) / 240f;
+            for (int img : new int[] {20, 22, 24}) {
+                for (FrameSlices.Piece p : FrameSlices.place(img, fl.gameL, fl.gameT, fl.gameR, fl.gameB, gs, size[0], size[1])) {
+                    boolean overlaps = p.l < fl.gameR - 0.01f && p.r > fl.gameL + 0.01f && p.t < fl.gameB - 0.01f && p.b > fl.gameT + 0.01f;
+                    check(!overlaps, "frame piece over the game at " + size[0] + "x" + size[1]);
+                    check(p.l >= -0.01f && p.t >= -0.01f && p.r <= size[0] + 0.01f && p.b <= size[1] + 0.01f,
+                            "frame piece off screen at " + size[0] + "x" + size[1]);
+                    check(p.sx >= 0 && p.sy >= 0 && p.sx + p.sw <= img && p.sy + p.sh <= img, "frame source inside the image");
+                }
+            }
+        }
+
         // ---- the catalogue ----
         java.util.Set<String> ids = new java.util.HashSet<>();
         java.util.Set<Integer> bgs = new java.util.HashSet<>();
