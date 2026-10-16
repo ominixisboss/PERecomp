@@ -1408,15 +1408,26 @@ index 000000000..06df38408
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
 new file mode 100644
-index 000000000..bcf38caf4
+index 000000000..744af6a2d
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,421 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/** Draws a ControlsLayout through a Painter: the same code on device and in previews. */
 +public final class ControlsRenderer {
 +    private static final int EDIT_OUTLINE = 0xFFFFD040;
++    /**
++     * A soft dark backing under every flat-style control, so its label stays
++     * readable over any background art -- a translucent white button with a
++     * white label over a moon or a sunlit cloud had a contrast of about 1:1.
++     * ThemeCheck measures label contrast with this backing in place.
++     */
++    public static final int BACKING = 0xA0101018, BACKING_MINIMAL = 0x60101018;
++
++    static int backing(ButtonStyle st, float o) {
++        return fade(st.outlineOnly ? BACKING_MINIMAL : BACKING, o);
++    }
 +
 +    private ControlsRenderer() {}
 +
@@ -1477,12 +1488,14 @@ index 000000000..bcf38caf4
 +        // The gear gets a dark backing: on a light theme with a faint style it
 +        // would otherwise be hard to find, and it is the way into settings.
 +        if (ControlsLayout.GEAR.equals(it.id)) p.fillCircle(it.cx, it.cy, r, 0x99000000);
-+        p.fillCircle(it.cx, it.cy, r, fade(faceFor(st, it, down), o));
++        else p.fillCircle(it.cx, it.cy, r, backing(st, o));
++        int f = faceFor(st, it, down), ink = fade(inkOn(st, f), o);
++        p.fillCircle(it.cx, it.cy, r, fade(f, o));
 +        p.strokeCircle(it.cx, it.cy, r, Math.max(2, r * 0.07f), edit ? EDIT_OUTLINE : fade(st.outline, o));
 +        if (ControlsLayout.GEAR.equals(it.id)) {
-+            drawGear(p, it.cx, it.cy, r * 0.62f, fade(st.label, o));
++            drawGear(p, it.cx, it.cy, r * 0.62f, ink);
 +        } else if (it.label != null) {
-+            p.text(it.label, it.cx, it.cy, r * 0.95f, fade(st.label, o));
++            p.text(it.label, it.cx, it.cy, r * 0.95f, ink);
 +        }
 +    }
 +
@@ -1498,11 +1511,13 @@ index 000000000..bcf38caf4
 +
 +    private static void drawPill(Painter p, ControlsLayout.Item it, ButtonStyle st, float o, boolean down, boolean edit) {
 +        float l = it.cx - it.w / 2, t = it.cy - it.h / 2, rr = it.h / 2;
-+        p.fillRoundRect(l, t, l + it.w, t + it.h, rr, fade(faceFor(st, it, down), o));
++        p.fillRoundRect(l, t, l + it.w, t + it.h, rr, backing(st, o));
++        int f = faceFor(st, it, down);
++        p.fillRoundRect(l, t, l + it.w, t + it.h, rr, fade(f, o));
 +        p.strokeRoundRect(l, t, l + it.w, t + it.h, rr, Math.max(2, it.h * 0.06f), edit ? EDIT_OUTLINE : fade(st.outline, o));
 +        if (it.label != null) {
 +            float size = Math.min(it.h * 0.55f, it.w / Math.max(1, it.label.length() * 0.62f));
-+            p.text(it.label, it.cx, it.cy, size, fade(st.label, o));
++            p.text(it.label, it.cx, it.cy, size, fade(inkOn(st, f), o));
 +        }
 +    }
 +
@@ -1516,6 +1531,7 @@ index 000000000..bcf38caf4
 +        // overlapping bars, a translucent face doubled up in the middle and
 +        // both outlines ran across the centre.
 +        float[] cross = crossOutline(it.cx, it.cy, r, arm);
++        p.fillPolygon(cross, backing(st, o));
 +        p.fillPolygon(cross, face);
 +        p.strokePolygon(cross, stroke, outline);
 +        // pressed arms
@@ -1525,7 +1541,7 @@ index 000000000..bcf38caf4
 +        if ((dirs & Keys.LEFT) != 0)  p.fillRoundRect(it.cx - r, it.cy - arm, it.cx - arm, it.cy + arm, round, lit);
 +        if ((dirs & Keys.RIGHT) != 0) p.fillRoundRect(it.cx + arm, it.cy - arm, it.cx + r, it.cy + arm, round, lit);
 +        // arrows
-+        int c = fade(st.label, o * 0.85f);
++        int c = fade(inkOn(st, st.dpad), o * 0.85f);
 +        float a = arm * 0.55f, tip = r * 0.88f, base = r * 0.55f;
 +        p.fillTriangle(it.cx, it.cy - tip, it.cx - a, it.cy - base, it.cx + a, it.cy - base, c);
 +        p.fillTriangle(it.cx, it.cy + tip, it.cx - a, it.cy + base, it.cx + a, it.cy + base, c);
@@ -1548,6 +1564,44 @@ index 000000000..bcf38caf4
 +    static int shade(int argb, float f) {
 +        int target = f >= 0 ? (argb & 0xFF000000) | 0xFFFFFF : argb & 0xFF000000;
 +        return mix(argb, target, Math.abs(f));
++    }
++    /** An engraving on a face: darker, unless the face is already too dark
++     *  for a darker mark to show, then lighter. */
++    static int engrave(int argb) {
++        int r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
++        return (r * 299 + g * 587 + b * 114) / 1000 < 70 ? shade(argb, 0.30f) : shade(argb, -0.5f);
++    }
++    /** WCAG relative luminance of an opaque colour. */
++    static double luminance(int rgb) {
++        double l = 0;
++        double[] w = {0.2126, 0.7152, 0.0722};
++        for (int i = 0; i < 3; i++) {
++            double v = ((rgb >> (16 - 8 * i)) & 0xFF) / 255.0;
++            l += w[i] * (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
++        }
++        return l;
++    }
++    public static double contrast(int a, int b) {
++        double x = luminance(a), y = luminance(b);
++        return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
++    }
++    /** a composited over b, ignoring b's alpha. */
++    static int over(int a, int b) {
++        return 0xFF000000 | (mix(b, a, ((a >>> 24) & 0xFF) / 255f) & 0xFFFFFF);
++    }
++    /** What a flat control's face looks like on screen: the face over the
++     *  backing over a mid-tone background. */
++    public static int seenFace(ButtonStyle st, int face) {
++        return over(face, over(st.outlineOnly ? BACKING_MINIMAL : BACKING, 0xFF707078));
++    }
++    /** The style's label colour, unless it does not read on this face (the
++     *  Famicom style's dark ink on its red A and dark D-pad), then whichever
++     *  of near-white or near-black reads better. Alpha kept. */
++    public static int inkOn(ButtonStyle st, int face) {
++        int seen = seenFace(st, face), label = st.label;
++        if (contrast(label, seen) >= 3.0) return label;
++        int light = 0xF4F4F8, dark = 0x141418;
++        return (label & 0xFF000000) | (contrast(light, seen) >= contrast(dark, seen) ? light : dark);
 +    }
 +    static int alpha(int argb, int a) { return (a << 24) | (argb & 0xFFFFFF); }
 +
@@ -1598,14 +1652,15 @@ index 000000000..bcf38caf4
 +        }
 +
 +        // Speaker grille, bottom right: rows of slanted slots.
-+        float gx = w - Math.max(h * 0.09f, (w - l.gameR) * 0.22f), gy = h - h * 0.075f, dot = Math.max(2, h * 0.006f);
++        // It ends left of the bottom-right screw rather than running into it.
++        float dot = Math.max(2, h * 0.006f), sr = Math.max(3, h * 0.009f);
++        float gx = w * 0.975f - sr * 1.3f - dot * 3 - dot * 4 * 3.2f - dot, gy = h - h * 0.075f;
 +        for (int row = 0; row < 3; row++)
 +            for (int col = 0; col < 5; col++)
 +                p.fillCircle(gx + col * dot * 3.2f - row * dot * 1.6f, gy + row * dot * 3.2f, dot,
 +                        shade(st.shellShade, -0.45f));
 +
 +        // Screws.
-+        float sr = Math.max(3, h * 0.009f);
 +        float[][] screws = {{w * 0.025f, h * 0.04f}, {w * 0.975f, h * 0.04f}, {w * 0.025f, h * 0.96f}, {w * 0.975f, h * 0.96f}};
 +        for (float[] sc : screws) {
 +            p.fillCircle(sc[0], sc[1], sr * 1.3f, shade(st.shellShade, -0.2f));
@@ -1743,7 +1798,7 @@ index 000000000..bcf38caf4
 +                float m = len * 0.72f, s2 = a * 0.42f;
 +                float ax = cx + d[0] * m, ay = cy + d[1] * m, px = -d[1], py = d[0];
 +                p.fillTriangle(ax + d[0] * s2, ay + d[1] * s2, ax - d[0] * s2 * 0.4f + px * s2, ay - d[1] * s2 * 0.4f + py * s2,
-+                        ax - d[0] * s2 * 0.4f - px * s2, ay - d[1] * s2 * 0.4f - py * s2, fade(shade(c, -0.5f), o));
++                        ax - d[0] * s2 * 0.4f - px * s2, ay - d[1] * s2 * 0.4f - py * s2, fade(engrave(c), o));
 +            }
 +            // centre hub with its dimple
 +            p.fillRoundRect(cx - a, cy - a, cx + a, cy + a, a * 0.2f, fade(face, o));

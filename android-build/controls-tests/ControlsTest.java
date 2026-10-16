@@ -133,6 +133,15 @@ public final class ControlsTest {
                 if ((shellImg.getRGB(x, y) >>> 24) != 0) painted++;
         check(painted == 0, "shell leaves the game rectangle untouched (" + painted + " px painted)");
 
+        // Every flat style's ink reads on every face it is drawn on.
+        for (ButtonStyle st : ButtonStyle.ALL) {
+            if (st.gba) continue;
+            for (int face : new int[] {st.face, st.pressed, st.dpad, st.accentA, st.accentB}) {
+                if (face == 0) continue;
+                double c = ControlsRenderer.contrast(ControlsRenderer.inkOn(st, face), ControlsRenderer.seenFace(st, face));
+                check(c >= 3.0, st.name + " ink on " + Integer.toHexString(face) + " contrast " + c);
+            }
+        }
         System.out.println(failures == 0 ? "ALL CONTROLS TESTS PASSED" : failures + " FAILURES");
         System.exit(failures == 0 ? 0 : 1);
     }

@@ -815,3 +815,42 @@ saved as RGB, which is what made GBA Indigo striped. They are now drawn on a
 clear layer and alpha-composited. The flat-style D-pad is also one cross
 polygon instead of two overlapping translucent bars, which had doubled up in
 the middle with outlines crossing the centre.
+
+## Themes, measured
+
+After the blending fix the themes were still hard to use, and the way to stop
+judging that by eye was to measure it. `controls-tests/ThemeCheck.java`
+cover-scales each background the way the overlay does, lays the real control
+layout over it at 2400, 2340, 2404 and 1920 x 1080, and for every control
+measures:
+
+- **busyness**: the luminance standard deviation of the art under it, at most
+  22. A sprite outline, a moon or a sun disc behind a button hides the button.
+- **label contrast**: the WCAG ratio of the label against the face, over the
+  backing, over the lightest and darkest pixel under it, at least 3:1.
+
+On the first run 8 of the 9 failed: full-colour sprites sat right under the
+D-pad and A/B, and the translucent white Classic buttons had about 1:1
+contrast over clouds and moons. Three changes fixed them:
+
+- The generated themes keep their Pokémon only as faint, blurred, tinted
+  watermarks over calm gradients.
+- Every flat control has a soft dark backing (`ControlsRenderer.BACKING`)
+  under its face, so a translucent face never sits straight on bright art.
+- The fork's own two paintings (Starfall, Open Sea) are softened at build
+  time: fine detail is pulled toward a broad blur, highlights are rolled off,
+  and the result is slightly darkened. A PNG text marker keeps a rerun from
+  softening them twice.
+
+All nine now pass. The check runs in CI with the controls tests, and a theme
+that regresses fails the build.
+
+The same review found three renderer bugs:
+
+- The Famicom style's dark ink on its dark D-pad and red A/B was 1.2:1 and
+  1.9:1. Labels now switch to near-white or near-black when the style's own ink
+  would not read on that face (`inkOn`). A test checks every style against
+  every face.
+- On the black handheld the D-pad's engraved arrows were darker than a
+  near-black cross. They are now engraved lighter on dark plastic.
+- The speaker grille ran into the bottom-right screw.

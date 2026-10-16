@@ -33,7 +33,7 @@ to allow installing from an unknown source.
 | [`android-build/arena/`](android-build/arena) + [`emerald-arena.sh`](android-build/emerald-arena.sh) | Fetches Emerald Arena at a pinned commit and applies its engine patch, rebased onto the fork with its 64-bit fixes. `EMERALD_ARENA=0` builds without it. |
 | [`android-build/build-android.sh`](android-build/build-android.sh) | Builds the APK. |
 | [`android-build/build-native64.sh`](android-build/build-native64.sh) | Builds the same code as a 64-bit desktop program and plays it headless. This is CI's crash test (see below). |
-| [`android-build/themes/`](android-build/themes) | Generates the background themes from the game's own sprites at build time. |
+| [`android-build/themes/`](android-build/themes) | Generates the background themes from the game's own sprites at build time, and softens the fork's two painted ones so buttons read over them. |
 | [`android-build/controls-tests/`](android-build/controls-tests) | Tests and image previews for the touch controls, running the app's real layout and drawing code on a plain JVM. |
 | [`.github/workflows/pokeemerald-android.yml`](.github/workflows/pokeemerald-android.yml) | Builds both APKs, runs the crash test, and publishes the `latest` release. |
 | [`android-build/ARM64-PORT.md`](android-build/ARM64-PORT.md) | The engineering log: every bug found, how, and how it was fixed. |
@@ -55,6 +55,11 @@ Any crash fails the build, and its log names the function. Static checks also ru
 zero compiler-reported pointer truncations, no misaligned pointer tables in the
 hand-assembled game data, and every bytecode command handler cross-checked against
 the macro that encodes it.
+
+The themes are checked too. Every background is laid under the app's real
+control layout at four phone shapes. Under each button the art must be calm
+(no sprite edges or bright moons behind a label) and the label must keep a 3:1
+contrast. Every button style's ink must read on each face it is drawn on.
 
 Every bug fixed here was found this way or from a crash report on a phone. They
 include a DMA register that truncated a pointer, map event tables laid out 4 bytes

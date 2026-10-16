@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate the extra screen-background themes (BG2.png ...) from the game's
-own graphics, so no outside artwork is needed and the art is reproducible.
+own graphics, so no outside artwork is needed and the art is reproducible,
+and soften the fork's own two (BG.png, BG1.png) so buttons read over them.
 
 Run from the pokeemerald-multiplatform root:  python3 make_themes.py [outdir]
 
@@ -11,7 +12,7 @@ theme keeps its subject in those side bands and its vertical middle.
 """
 import math, random, sys
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps, PngImagePlugin
 
 W, H = 1600, 900
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else '.')
@@ -104,78 +105,97 @@ def clouds_layer(img, y, scale, seed, alpha=200):
         x += c.width - 8
 
 
+# ---- the themes ----------------------------------------------------------
+#
+# Everything in the side bands sits behind a button, so the bands must stay
+# calm: ThemeCheck (android-build/controls-tests) fails a theme whose
+# background luminance varies by more than a set amount under any control.
+# Scenes are carried by colour and soft light; Pokemon appear as large faint
+# watermarks tinted into the palette, never as full-contrast sprites.
+
+def watermark(img, name, scale, pos, tint, alpha=0.22, flip=False, frame=0):
+    """A sprite as a soft, single-hue silhouette: luminance mapped onto the
+    theme's tint, faded and slightly blurred so its edges never read as a
+    hard line behind a button."""
+    spr = sprite(name, scale, frame)
+    if flip:
+        spr = spr.transpose(Image.FLIP_LEFT_RIGHT)
+    lum = spr.convert('L')
+    col = ImageOps.colorize(lum, black=tuple(max(0, c - 40) for c in tint),
+                            white=tuple(min(255, c + 60) for c in tint)).convert('RGBA')
+    a = spr.getchannel('A').point(lambda v: int(v * alpha))
+    col.putalpha(a)
+    col = col.filter(ImageFilter.GaussianBlur(scale * 0.6))
+    img.alpha_composite(col, pos)
+
+
+def glow(img, cx, cy, r, colour, strength):
+    """A soft radial light, no edge."""
+    with Layer(img) as d:
+        steps = 40
+        for i in range(steps, 0, -1):
+            rr = r * i / steps
+            a = int(strength * (1 - i / steps) ** 1.6 * 255 / steps * 3)
+            d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=colour + (min(255, a),))
+
+
+def soft_band(img, y0, y1, top, bottom):
+    """A horizon that fades over its height rather than a hard line."""
+    band = gradient(top, bottom, y1 - y0).convert('RGBA')
+    mask = Image.linear_gradient('L').resize((W, y1 - y0)).point(lambda v: min(255, v * 2))
+    band.putalpha(mask)
+    img.alpha_composite(band, (0, y0))
+
+
 def rayquaza_sky():
-    img = gradient((18, 64, 70), (70, 160, 150)).convert('RGBA')
-    stars(img, 140, 1, (0, 0, W, 300))
-    clouds_layer(img, 540, 4, 2, 150)
-    clouds_layer(img, 650, 6, 3, 220)
-    place(img, sprite('rayquaza', 5), (-60, 170))
-    place(img, sprite('rayquaza', 5).transpose(Image.FLIP_LEFT_RIGHT), (W - 260, 140))
+    img = gradient((20, 70, 78), (40, 110, 104)).convert('RGBA')
+    stars(img, 60, 1, (0, 0, W, 260), (200, 240, 230))
+    glow(img, W // 2, 420, 700, (90, 170, 150), 0.6)
+    watermark(img, 'rayquaza', 6, (-90, 120), (60, 150, 120))
+    watermark(img, 'rayquaza', 6, (W - 300, 100), (60, 150, 120), flip=True)
     return img
 
 
 def hoenn_sunset():
-    img = gradient((255, 140, 90), (120, 60, 140), 520).convert('RGBA')
-    sea = gradient((40, 90, 160), (10, 30, 80), H - 520).convert('RGBA')
-    img = img.crop((0, 0, W, H)); img.alpha_composite(sea, (0, 520))
-    d = ImageDraw.Draw(img)
-    for x0 in (120, W - 120):   # a low sun on each side
-        d.ellipse([x0 - 90, 380, x0 + 90, 560], fill=(255, 220, 140, 255))
-    img.alpha_composite(sea, (0, 520))
-    r = random.Random(4)
-    with Layer(img) as d:
-        for y in range(540, H, 22):    # glints
-            for _ in range(10):
-                x = r.randrange(0, W); w = r.randrange(20, 70)
-                d.line([(x, y), (x + w, y)], fill=(255, 200, 150, r.randrange(60, 150)), width=3)
-    place(img, sprite('kyogre', 4), (-20, 470))
-    place(img, sprite('wailord', 4).transpose(Image.FLIP_LEFT_RIGHT), (W - 270, 470))
+    img = gradient((222, 128, 104), (112, 72, 132)).convert('RGBA')
+    soft_band(img, 470, H, (70, 80, 140), (40, 50, 100))
+    glow(img, 130, 470, 260, (255, 200, 140), 0.5)
+    glow(img, W - 130, 470, 260, (255, 200, 140), 0.5)
+    watermark(img, 'kyogre', 5, (-50, 430), (60, 80, 150))
+    watermark(img, 'wailord', 5, (W - 300, 430), (60, 80, 150), flip=True)
     return img
 
 
 def magma():
-    img = gradient((40, 8, 8), (150, 40, 10)).convert('RGBA')
+    img = gradient((52, 14, 12), (112, 34, 16)).convert('RGBA')
+    glow(img, 150, H, 520, (255, 110, 40), 0.45)
+    glow(img, W - 150, H, 520, (255, 110, 40), 0.45)
     r = random.Random(5)
-    with Layer(img) as d:
-        for _ in range(26):                # lava cracks
-            x = r.randrange(0, W); y = r.randrange(600, H)
-            pts = [(x, y)]
-            for _ in range(6):
-                x += r.randrange(-60, 60); y += r.randrange(-30, 30); pts.append((x, y))
-            d.line(pts, fill=(255, 140, 30, 220), width=r.randrange(3, 7))
-        for _ in range(90):                # embers
-            x = r.randrange(0, W); y = r.randrange(0, H); s = r.randrange(2, 6)
-            d.ellipse([x, y, x + s, y + s], fill=(255, r.randrange(120, 220), 40, r.randrange(120, 255)))
-    img = img.filter(ImageFilter.GaussianBlur(0.6))
-    place(img, sprite('groudon', 5), (-70, 330))
-    place(img, sprite('groudon', 5).transpose(Image.FLIP_LEFT_RIGHT), (W - 250, 330))
+    with Layer(img) as d:                 # a few faint embers, high up
+        for _ in range(40):
+            x = r.randrange(0, W); y = r.randrange(0, 260); s = r.randrange(2, 5)
+            d.ellipse([x, y, x + s, y + s], fill=(255, 170, 80, r.randrange(50, 110)))
+    watermark(img, 'groudon', 6, (-110, 300), (150, 50, 30))
+    watermark(img, 'groudon', 6, (W - 280, 300), (150, 50, 30), flip=True)
     return img
 
 
 def starter_meadow():
-    img = gradient((130, 200, 255), (200, 235, 255), 430).convert('RGBA')
-    grass = gradient((120, 200, 90), (60, 140, 60), H - 430).convert('RGBA')
-    img = img.crop((0, 0, W, H)); img.alpha_composite(grass, (0, 430))
-    clouds_layer(img, 120, 4, 6, 230)
-    d = ImageDraw.Draw(img); r = random.Random(7)
-    for _ in range(900):               # grass tufts
-        x = r.randrange(0, W); y = r.randrange(440, H)
-        d.line([(x, y), (x + r.randrange(-4, 5), y - r.randrange(6, 16))],
-               fill=(40, 120 + r.randrange(0, 60), 40, 255), width=2)
-    place(img, sprite('treecko', 3), (10, 420))
-    place(img, sprite('torchic', 3), (W - 210, 400))
-    place(img, sprite('mudkip', 3).transpose(Image.FLIP_LEFT_RIGHT), (W - 230, 600))
+    img = gradient((122, 178, 214), (150, 196, 170)).convert('RGBA')
+    soft_band(img, 520, H, (110, 168, 112), (86, 140, 92))
+    glow(img, W // 2, 160, 600, (255, 250, 220), 0.35)
+    watermark(img, 'treecko', 4, (0, 380), (60, 120, 70), alpha=0.26)
+    watermark(img, 'torchic', 4, (W - 260, 300), (60, 120, 70), alpha=0.26, flip=True)
+    watermark(img, 'mudkip', 4, (W - 280, 560), (60, 120, 70), alpha=0.26, flip=True)
     return img
 
 
 def eon_night():
-    img = gradient((8, 10, 40), (40, 30, 90)).convert('RGBA')
-    stars(img, 420, 8)
-    d = ImageDraw.Draw(img)
-    d.ellipse([60, 60, 200, 200], fill=(250, 245, 220, 255))      # moon
-    d.ellipse([95, 50, 235, 190], fill=(12, 13, 47, 255))
-    place(img, sprite('latias', 4), (-10, 360))
-    place(img, sprite('latios', 4).transpose(Image.FLIP_LEFT_RIGHT), (W - 260, 300))
+    img = gradient((14, 16, 46), (34, 28, 76)).convert('RGBA')
+    stars(img, 140, 8, (0, 0, W, H), (190, 200, 255))
+    glow(img, 150, 150, 220, (230, 230, 255), 0.35)
+    watermark(img, 'latias', 5, (-40, 300), (120, 90, 170))
+    watermark(img, 'latios', 5, (W - 290, 280), (90, 110, 190), flip=True)
     return img
 
 
@@ -192,31 +212,43 @@ def gba_indigo():
 def classic_green():
     pal = [(15, 56, 15), (48, 98, 48), (139, 172, 15), (155, 188, 15)]
     img = Image.new('RGBA', (W, H), pal[2] + (255,))
-    d = ImageDraw.Draw(img)
-    for y in range(0, H, 16):
-        for x in range(0, W, 16):
-            if (x // 16 + y // 16) % 2 == 0:
-                d.rectangle([x, y, x + 15, y + 15], fill=pal[3] + (255,))
-    for spr, pos in ((sprite('treecko', 4), (-10, 360)),
-                     (sprite('mudkip', 4).transpose(Image.FLIP_LEFT_RIGHT), (W - 250, 360))):
-        # Four-shade it like the original handheld, by luminance rank within
-        # the sprite so a bright sprite does not vanish into the background.
-        lum = spr.convert('L'); alpha = spr.getchannel('A')
-        lp, ap = lum.load(), alpha.load()
-        levels = sorted({lp[xx, yy] for yy in range(spr.height) for xx in range(spr.width) if ap[xx, yy]})
-        shade = [pal[0], pal[1], pal[3]]
-        mono = Image.new('RGBA', spr.size, (0, 0, 0, 0)); mp = mono.load()
-        for yy in range(spr.height):
-            for xx in range(spr.width):
-                if ap[xx, yy]:
-                    rank = levels.index(lp[xx, yy]) * 3 // max(1, len(levels))
-                    mp[xx, yy] = shade[min(2, rank)] + (255,)
-        img.alpha_composite(mono, pos)
+    # A faint version of the handheld's dot grid, not a loud checkerboard.
+    with Layer(img) as d:
+        for y in range(0, H, 12):
+            for x in range(0, W, 12):
+                d.rectangle([x, y, x + 1, y + 1], fill=pal[1] + (40,))
+    watermark(img, 'treecko', 5, (-40, 330), (60, 100, 20), alpha=0.25)
+    watermark(img, 'mudkip', 5, (W - 290, 330), (60, 100, 20), alpha=0.25, flip=True)
     return img
+
+
+def soften_original(path):
+    """The fork's own two backgrounds (BG.png, BG1.png) are busy painted art
+    with a bright moon and characters exactly where the buttons sit. Keep the
+    painting but soften it: fine detail pulled toward a broad blur, highlights
+    rolled off, a little darker. Marked in the PNG so a rerun doesn't soften
+    it twice."""
+    if not path.exists():
+        return
+    im = Image.open(path)
+    if im.info.get('softened') == '1':
+        return
+    im = im.convert('RGB')
+    fine = im.filter(ImageFilter.GaussianBlur(3))
+    broad = im.filter(ImageFilter.GaussianBlur(45))
+    out = Image.blend(fine, broad, 0.65)
+    out = out.point(lambda v: v if v < 150 else int(150 + (v - 150) * 0.35))
+    out = ImageEnhance.Brightness(out).enhance(0.85)
+    meta = PngImagePlugin.PngInfo()
+    meta.add_text('softened', '1')
+    out.save(path, optimize=True, pnginfo=meta)
+    print(f'{path.name}  softened')
 
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    for name in ('BG.png', 'BG1.png'):
+        soften_original(OUT / name)
     for i, name in enumerate(ORDER):
         img = globals()[name]()
         img.convert('RGB').save(OUT / f'BG{i + 2}.png', optimize=True)
