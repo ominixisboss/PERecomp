@@ -112,6 +112,11 @@ public final class ControlsTest {
         for (Themes th : Themes.ALL) if (th.isShell()) { shells++; check(ButtonStyle.ALL[th.style].gba, th.name + " uses a hardware style"); }
         check(shells == 12, "twelve handheld shells (" + shells + ")");
         check(Themes.forBackground(Themes.SHELL) == -1, "shell is never matched as an image background");
+        // A handheld is a theme, not a button style: a stored handheld style
+        // (possible in older versions) would give its buttons with no body.
+        check(Settings.parse("style=8").style == Settings.MATCH_THEME, "handheld button style is not kept");
+        check(Settings.parse("style=21").style == Settings.MATCH_THEME, "new handheld button style is not kept");
+        check(Settings.parse("style=16").style == 16, "a flat style is kept");
 
         // ---- the catalogue ----
         java.util.Set<String> ids = new java.util.HashSet<>();

@@ -129,10 +129,10 @@ index 000000000..44f3cbe4b
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
 new file mode 100644
-index 000000000..5d943baa9
+index 000000000..deb2bc2c8
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,239 @@
 +package com.pokeemerald.experimental;
 +
 +import android.app.AlertDialog;
@@ -201,19 +201,24 @@ index 000000000..5d943baa9
 +        Runnable showTheme = () -> themeName.setText(currentThemeName(view));
 +        showTheme.run();
 +
-+        // Button styles, grouped: flat ones, then the handheld shells. The
++        // Button styles for picture themes: the flat ones only. A handheld is
++        // a theme (its body and its buttons), picked in the gallery; offering
++        // it here gave handheld buttons with no handheld around them. The
 +        // stored value stays the style's index in ButtonStyle.ALL.
 +        final List<Integer> styleIndex = new ArrayList<>();
 +        List<String> styleNames = new ArrayList<>();
 +        styleIndex.add(Settings.MATCH_THEME);
 +        styleNames.add("Match theme");
-+        for (boolean shells : new boolean[] {false, true})
-+            for (int i = 0; i < ButtonStyle.ALL.length; i++)
-+                if (ButtonStyle.ALL[i].gba == shells) { styleIndex.add(i); styleNames.add(ButtonStyle.ALL[i].name); }
++        for (int i = 0; i < ButtonStyle.ALL.length; i++)
++            if (!ButtonStyle.ALL[i].gba) { styleIndex.add(i); styleNames.add(ButtonStyle.ALL[i].name); }
 +        Spinner style = spinner(c, styleNames);
 +        style.setSelection(Math.max(0, styleIndex.indexOf(s.style)), false);
 +        header(col, c, "Button style");
 +        col.addView(style);
++        TextView styleNote = new TextView(c);
++        styleNote.setText("For picture themes. Handheld themes always use their own buttons.");
++        styleNote.setTextColor(0xFFB0B8C0);
++        col.addView(styleNote);
 +
 +        header(col, c, "Button size");
 +        SeekBar size = seek(c, 80, Math.round((s.scale - 0.7f) * 100));
@@ -368,10 +373,10 @@ index 000000000..5d943baa9
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-index 7f1cea0b5..32aa1e5f3 100644
+index 7f1cea0b5..356f5de67 100644
 --- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-@@ -1,188 +1,294 @@
+@@ -1,188 +1,290 @@
  package com.pokeemerald.experimental;
  
  import android.content.Context;
@@ -440,7 +445,6 @@ index 7f1cea0b5..32aa1e5f3 100644
 -    private int backgroundCount;
 -    private Bitmap border;
 +    private final ControlsAnimator animator = new ControlsAnimator();
-+    private final int backgroundCount;
 +    private final SharedPreferences prefs;
 +    private Settings settings;
 +    private ControlsLayout layout;
@@ -474,9 +478,6 @@ index 7f1cea0b5..32aa1e5f3 100644
 -            border = BitmapFactory.decodeStream(context.getAssets().open("Border.png"));
 +        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        settings = Settings.parse(prefs.getString(KEY, null));
-+        int n = 0;
-+        while (n < 64 && backgroundExists(context, n)) n++;   // MAX_BORDER_BACKGROUNDS in sdl2.c
-+        backgroundCount = n;
 +        try (InputStream in = context.getAssets().open("Border.png")) {
 +            border = BitmapFactory.decodeStream(in);
          } catch (IOException ignored) {
@@ -567,7 +568,7 @@ index 7f1cea0b5..32aa1e5f3 100644
 +            if (editing && it != null) {
 +                f.grabX = it.cx - event.getX(index);
 +                f.grabY = it.cy - event.getY(index);
-             }
++            }
 +            fingers.put(id, f);
 +        }
 +
@@ -575,8 +576,7 @@ index 7f1cea0b5..32aa1e5f3 100644
 +            onEditTouch(event, up ? id : -1);
 +        } else {
 +            onPlayTouch(event, up ? index : -1);
-         }
--        return result;
++        }
 +
 +        if (up) {
 +            Finger f = fingers.get(id);
@@ -588,21 +588,8 @@ index 7f1cea0b5..32aa1e5f3 100644
 +            }
 +        }
 +        return true;
-     }
- 
--    private int keyCode(int control) {
--        switch (control) {
--        case A:      return KeyEvent.KEYCODE_Z;
--        case B:      return KeyEvent.KEYCODE_X;
--        case SELECT: return KeyEvent.KEYCODE_BACKSLASH;
--        case START:  return KeyEvent.KEYCODE_ENTER;
--        case RIGHT:  return KeyEvent.KEYCODE_DPAD_RIGHT;
--        case LEFT:   return KeyEvent.KEYCODE_DPAD_LEFT;
--        case UP:     return KeyEvent.KEYCODE_DPAD_UP;
--        case DOWN:   return KeyEvent.KEYCODE_DPAD_DOWN;
--        case R:      return KeyEvent.KEYCODE_S;
--        case L:      return KeyEvent.KEYCODE_A;
--        default:     return KeyEvent.KEYCODE_UNKNOWN;
++    }
++
 +    private void onPlayTouch(MotionEvent event, int releasedIndex) {
 +        int next = 0;
 +        for (int i = 0; i < event.getPointerCount(); i++) {
@@ -619,11 +606,25 @@ index 7f1cea0b5..32aa1e5f3 100644
 +                // finger that went down there steers it.
 +                if (it != null && it.shape != ControlsLayout.Shape.DPAD)
 +                    next |= it.keys;
-+            }
+             }
          }
+-        return result;
 +        setPressed(next);
-+    }
-+
+     }
+ 
+-    private int keyCode(int control) {
+-        switch (control) {
+-        case A:      return KeyEvent.KEYCODE_Z;
+-        case B:      return KeyEvent.KEYCODE_X;
+-        case SELECT: return KeyEvent.KEYCODE_BACKSLASH;
+-        case START:  return KeyEvent.KEYCODE_ENTER;
+-        case RIGHT:  return KeyEvent.KEYCODE_DPAD_RIGHT;
+-        case LEFT:   return KeyEvent.KEYCODE_DPAD_LEFT;
+-        case UP:     return KeyEvent.KEYCODE_DPAD_UP;
+-        case DOWN:   return KeyEvent.KEYCODE_DPAD_DOWN;
+-        case R:      return KeyEvent.KEYCODE_S;
+-        case L:      return KeyEvent.KEYCODE_A;
+-        default:     return KeyEvent.KEYCODE_UNKNOWN;
 +    private void onEditTouch(MotionEvent event, int upId) {
 +        for (int i = 0; i < event.getPointerCount(); i++) {
 +            int id = event.getPointerId(i);
@@ -649,7 +650,7 @@ index 7f1cea0b5..32aa1e5f3 100644
 +            float y = Settings.clamp(event.getY(i) + f.grabY, it.h / 2, getHeight() - it.h / 2);
 +            it.cx = x; it.cy = y;
 +            settings.positions.put(it.id, new float[] {x / getWidth(), y / getHeight()});
-+        }
+         }
 +        invalidate();
 +    }
 +
@@ -714,25 +715,26 @@ index 7f1cea0b5..32aa1e5f3 100644
 -        for (int i = 0; i < event.getPointerCount(); i++) {
 -            if (i != releasedPointer) {
 -                next |= controlsAt(event.getX(i), event.getY(i));
+-            }
 +    // ---- drawing ----------------------------------------------------------
 +
-+    /** BACKGROUND OFF in the game's numbering: one past the last image. */
-+    int backgroundOff() { return backgroundCount; }
++    /** BACKGROUND OFF in the game's numbering: one past the last picture.
++     *  The game's own count, so the overlay and the game always agree. */
++    int backgroundOff() { return getBorderBackgroundCount(); }
 +
 +    /** A handheld shell is shown when one is chosen and the game's own background is off. */
 +    boolean shellActive() {
-+        return settings.shellTheme >= 0 && getBorderBackground() >= backgroundCount;
++        return settings.shellTheme >= 0 && getBorderBackground() >= getBorderBackgroundCount();
 +    }
 +
++    /** A handheld theme is its own buttons as well as its body, so it always
++     *  uses its own style; the button-style setting is for picture themes. */
 +    ButtonStyle currentStyle() {
++        if (shellActive()) return ButtonStyle.ALL[Themes.ALL[settings.shellTheme].style];
 +        int style = settings.style;
 +        if (style == Settings.MATCH_THEME) {
-+            if (shellActive()) {
-+                style = Themes.ALL[settings.shellTheme].style;
-+            } else {
-+                int theme = Themes.forBackground(getBorderBackground());
-+                style = theme < 0 ? 0 : Themes.ALL[theme].style;
-             }
++            int theme = Themes.forBackground(getBorderBackground());
++            style = theme < 0 ? 0 : Themes.ALL[theme].style;
          }
 -        setPressed(next);
 -        return true;
@@ -789,7 +791,7 @@ index 7f1cea0b5..32aa1e5f3 100644
              Rect[] regions = {
                      new Rect(0, 0, getWidth(), gameY),
                      new Rect(0, gameY + gameHeight, getWidth(), getHeight()),
-@@ -192,46 +298,62 @@ public final class GbaControlsView extends View {
+@@ -192,46 +294,63 @@ public final class GbaControlsView extends View {
              for (Rect region : regions) {
                  int state = canvas.save();
                  canvas.clipRect(region);
@@ -828,6 +830,7 @@ index 7f1cea0b5..32aa1e5f3 100644
 +    static native void setArenaEnabled(boolean on);
 +    static native int getBorderBackground();
 +    static native void setBorderBackground(int background);
++    static native int getBorderBackgroundCount();
      private static native int getPlatformSetting(int setting);
  
      @Override
@@ -2213,10 +2216,10 @@ index 000000000..9018e9e30
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
 new file mode 100644
-index 000000000..7a2c9dfd1
+index 000000000..51402fe03
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,82 @@
 +package com.pokeemerald.experimental.controls;
 +
 +import java.util.HashMap;
@@ -2229,7 +2232,7 @@ index 000000000..7a2c9dfd1
 +public final class Settings {
 +    public static final int MATCH_THEME = -1;
 +
-+    public int style = MATCH_THEME;     // ButtonStyle index, or MATCH_THEME
++    public int style = MATCH_THEME;     // a flat ButtonStyle index, or MATCH_THEME
 +    public float opacity = 1f;          // 0.2 .. 1, multiplies style alphas
 +    public float scale = 1f;            // 0.7 .. 1.5, multiplies control sizes
 +    public boolean haptics = true;
@@ -2290,7 +2293,10 @@ index 000000000..7a2c9dfd1
 +                // keep the default for this key
 +            }
 +        }
-+        if (s.style < MATCH_THEME || s.style >= ButtonStyle.ALL.length) s.style = MATCH_THEME;
++        // Out of range, or a handheld style: those come only with a handheld
++        // theme now (older versions let one be picked as a button style).
++        if (s.style < MATCH_THEME || s.style >= ButtonStyle.ALL.length
++                || (s.style >= 0 && ButtonStyle.ALL[s.style].gba)) s.style = MATCH_THEME;
 +        if (s.shellTheme < 0 || s.shellTheme >= Themes.ALL.length || !Themes.ALL[s.shellTheme].isShell())
 +            s.shellTheme = -1;
 +        return s;
@@ -2493,7 +2499,7 @@ index d107857b9..cb4a3e4e4 100755
  
  enum PlatformSetting
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index b991f1d93..c893f4f3c 100644
+index b991f1d93..ad2b39713 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
 @@ -36,8 +36,14 @@ SDL_Thread *mainLoopThread;
@@ -2740,7 +2746,7 @@ index b991f1d93..c893f4f3c 100644
  u8 Platform_GetSetting(enum PlatformSetting setting)
  {
      return sPlatformSettings[setting];
-@@ -901,6 +950,35 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
+@@ -901,6 +950,42 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
      return Platform_GetBorderBackground();
  }
  
@@ -2765,12 +2771,19 @@ index b991f1d93..c893f4f3c 100644
 +    StoreConfigFile();
 +}
 +
-+// The touch overlay's theme picker. 0..count-1 are BG.png/BGn.png and count
-+// is BACKGROUND OFF, the same range the game's own options menu cycles.
++// The touch overlay's theme picker. 0..count-1 are BG.png/BGn.png and
++// anything from count up is BACKGROUND OFF (how the overlay picks a handheld
++// or none). The overlay asks for the count rather than counting the assets
++// itself, so the two can never disagree about which number means off.
 +JNIEXPORT void JNICALL Java_com_pokeemerald_experimental_GbaControlsView_setBorderBackground(JNIEnv *env, jclass clazz, jint background)
 +{
-+    if (background >= 0 && background <= sBorderBackgroundCount)
-+        Platform_SetBorderBackground(background);
++    if (background >= 0)
++        Platform_SetBorderBackground(background > BORDER_BACKGROUND_OFF ? BORDER_BACKGROUND_OFF : background);
++}
++
++JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBorderBackgroundCount(JNIEnv *env, jclass clazz)
++{
++    return sBorderBackgroundCount;
 +}
 +
  JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getPlatformSetting(JNIEnv *env, jclass clazz, jint setting)
