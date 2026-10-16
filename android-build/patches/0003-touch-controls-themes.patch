@@ -48,10 +48,10 @@ index 8f443203c..05910f96e 100644
              path file('src/main/cpp/CMakeLists.txt')
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
 new file mode 100644
-index 000000000..2100dd71c
+index 000000000..44f3cbe4b
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,75 @@
 +package com.pokeemerald.experimental;
 +
 +import android.graphics.Canvas;
@@ -105,6 +105,12 @@ index 000000000..2100dd71c
 +        for (int i = 2; i < xy.length; i += 2) path.lineTo(xy[i], xy[i + 1]);
 +        path.close(); canvas.drawPath(path, fill);
 +    }
++    @Override public void strokePolygon(float[] xy, float width, int argb) {
++        stroke.setColor(argb); stroke.setStrokeWidth(width); stroke.setStrokeJoin(Paint.Join.ROUND);
++        path.reset(); path.moveTo(xy[0], xy[1]);
++        for (int i = 2; i < xy.length; i += 2) path.lineTo(xy[i], xy[i + 1]);
++        path.close(); canvas.drawPath(path, stroke);
++    }
 +    @Override public void fillRectGradient(float l, float t, float r, float b, int top, int bottom, float g0, float g1) {
 +        fill.setShader(new LinearGradient(0, g0, 0, g1, top, bottom, Shader.TileMode.CLAMP));
 +        canvas.drawRect(l, t, r, b, fill);
@@ -123,10 +129,10 @@ index 000000000..2100dd71c
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
 new file mode 100644
-index 000000000..f37a219e5
+index 000000000..7f5639f8e
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,233 @@
 +package com.pokeemerald.experimental;
 +
 +import android.app.AlertDialog;
@@ -164,6 +170,20 @@ index 000000000..f37a219e5
 +        LinearLayout col = new LinearLayout(c);
 +        col.setOrientation(LinearLayout.VERTICAL);
 +        col.setPadding(pad, pad / 2, pad, pad / 2);
++
++        // Emerald Arena on/off. Hidden in a build without the arena.
++        final Switch realtime;
++        if (GbaControlsView.isArenaBuilt()) {
++            header(col, c, "Game");
++            realtime = toggle(c, "Real-time battles (Emerald Arena)", GbaControlsView.getArenaEnabled());
++            col.addView(realtime);
++            TextView note = new TextView(c);
++            note.setText("Off: every battle uses the classic battle screen. Takes effect from the next battle.");
++            note.setTextColor(0xFFB0B8C0);
++            col.addView(note);
++        } else {
++            realtime = null;
++        }
 +
 +        // Theme: only the ones whose background is actually packaged.
 +        final List<Themes> themes = new ArrayList<>();
@@ -271,6 +291,14 @@ index 000000000..f37a219e5
 +                view.settingsChanged();
 +            }
 +        });
++        if (realtime != null) {
++            realtime.setOnCheckedChangeListener((b, on) -> {
++                GbaControlsView.setArenaEnabled(on);
++                // The BALL and < > buttons only mean something in the arena:
++                // follow the switch (they can still be toggled separately).
++                arena.setChecked(on);
++            });
++        }
 +        CompoundButton.OnCheckedChangeListener toggles = (b, on) -> {
 +            s.haptics = haptics.isChecked();
 +            s.arenaButtons = arena.isChecked();
@@ -307,7 +335,11 @@ index 000000000..f37a219e5
 +        TextView t = new TextView(c);
 +        t.setText(text);
 +        t.setTypeface(Typeface.DEFAULT_BOLD);
-+        t.setPadding(0, dp(c, 12), 0, dp(c, 2));
++        // Explicit colour: the dialog theme's default secondary text is a dark
++        // grey that all but disappears on the dark panel.
++        t.setTextColor(0xFF7FE0B4);
++        t.setTextSize(15);
++        t.setPadding(0, dp(c, 14), 0, dp(c, 2));
 +        col.addView(t);
 +    }
 +
@@ -335,7 +367,7 @@ index 000000000..f37a219e5
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-index 7f1cea0b5..2b598369e 100644
+index 7f1cea0b5..56ceefa41 100644
 --- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 @@ -1,188 +1,294 @@
@@ -756,7 +788,7 @@ index 7f1cea0b5..2b598369e 100644
              Rect[] regions = {
                      new Rect(0, 0, getWidth(), gameY),
                      new Rect(0, gameY + gameHeight, getWidth(), getHeight()),
-@@ -192,46 +298,59 @@ public final class GbaControlsView extends View {
+@@ -192,46 +298,62 @@ public final class GbaControlsView extends View {
              for (Rect region : regions) {
                  int state = canvas.save();
                  canvas.clipRect(region);
@@ -790,6 +822,9 @@ index 7f1cea0b5..2b598369e 100644
      }
  
 -    private static native int getBorderBackground();
++    static native boolean isArenaBuilt();
++    static native boolean getArenaEnabled();
++    static native void setArenaEnabled(boolean on);
 +    static native int getBorderBackground();
 +    static native void setBorderBackground(int background);
      private static native int getPlatformSetting(int setting);
@@ -1373,10 +1408,10 @@ index 000000000..06df38408
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
 new file mode 100644
-index 000000000..74870a27c
+index 000000000..bcf38caf4
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsRenderer.java
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,366 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/** Draws a ControlsLayout through a Painter: the same code on device and in previews. */
@@ -1419,6 +1454,15 @@ index 000000000..74870a27c
 +            float size = layout.height * 0.035f;
 +            p.text("Drag controls to move them", layout.width / 2f, layout.height - size * 1.2f, size, 0xFFFFFFFF);
 +        }
++    }
++
++    /** The 12 corners of a plus sign of half-length r and half-width arm. */
++    static float[] crossOutline(float cx, float cy, float r, float arm) {
++        return new float[] {
++            cx - arm, cy - r,   cx + arm, cy - r,   cx + arm, cy - arm,
++            cx + r, cy - arm,   cx + r, cy + arm,   cx + arm, cy + arm,
++            cx + arm, cy + r,   cx - arm, cy + r,   cx - arm, cy + arm,
++            cx - r, cy + arm,   cx - r, cy - arm,   cx - arm, cy - arm};
 +    }
 +
 +    private static int faceFor(ButtonStyle st, ControlsLayout.Item it, boolean down) {
@@ -1468,12 +1512,12 @@ index 000000000..74870a27c
 +        float stroke = Math.max(2, r * 0.035f);
 +        // A faint disc shows the live area: the whole circle tracks the thumb.
 +        p.fillCircle(it.cx, it.cy, r * 1.08f, fade(0x22FFFFFF, o));
-+        // cross
-+        p.fillRoundRect(it.cx - arm, it.cy - r, it.cx + arm, it.cy + r, round, face);
-+        p.fillRoundRect(it.cx - r, it.cy - arm, it.cx + r, it.cy + arm, round, face);
-+        p.strokeRoundRect(it.cx - arm, it.cy - r, it.cx + arm, it.cy + r, round, stroke, outline);
-+        p.strokeRoundRect(it.cx - r, it.cy - arm, it.cx + r, it.cy + arm, round, stroke, outline);
-+        p.fillRoundRect(it.cx - arm + stroke, it.cy - arm + stroke, it.cx + arm - stroke, it.cy + arm - stroke, round, face);
++        // The cross is one polygon, filled and outlined once. Drawn as two
++        // overlapping bars, a translucent face doubled up in the middle and
++        // both outlines ran across the centre.
++        float[] cross = crossOutline(it.cx, it.cy, r, arm);
++        p.fillPolygon(cross, face);
++        p.strokePolygon(cross, stroke, outline);
 +        // pressed arms
 +        int lit = fade(st.pressed, o);
 +        if ((dirs & Keys.UP) != 0)    p.fillRoundRect(it.cx - arm, it.cy - r, it.cx + arm, it.cy - arm, round, lit);
@@ -1730,8 +1774,7 @@ index 000000000..74870a27c
 +        }
 +
 +        private static void cross(Painter p, float cx, float cy, float r, float a, float tx, float ty, int c, boolean flat) {
-+            p.fillRoundRect(cx - a, cy - r, cx + a, cy + r, a * 0.3f, c);
-+            p.fillRoundRect(cx - r, cy - a, cx + r, cy + a, a * 0.3f, c);
++            p.fillPolygon(crossOutline(cx, cy, r, a), c);   // one shape: no doubled centre
 +        }
 +    }
 +}
@@ -1762,10 +1805,10 @@ index 000000000..3be686700
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java
 new file mode 100644
-index 000000000..92eb4c09a
+index 000000000..9018e9e30
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Painter.java
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,27 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/**
@@ -1781,6 +1824,8 @@ index 000000000..92eb4c09a
 +    void fillTriangle(float x1, float y1, float x2, float y2, float x3, float y3, int argb);
 +    /** Filled polygon from x0,y0,x1,y1,... */
 +    void fillPolygon(float[] xy, int argb);
++    /** Outline of a closed polygon, round-joined. */
++    void strokePolygon(float[] xy, float width, int argb);
 +    /** Rectangle filled with a vertical gradient running from top colour at
 +     *  y=g0 to bottom colour at y=g1 (global coordinates, so adjacent
 +     *  rectangles sharing g0/g1 join seamlessly). */
@@ -1926,11 +1971,64 @@ index 000000000..9ad4280fe
 +        return -1;
 +    }
 +}
+diff --git a/include/platform.h b/include/platform.h
+index d107857b9..cb4a3e4e4 100755
+--- a/include/platform.h
++++ b/include/platform.h
+@@ -10,6 +10,9 @@ void Platform_QueueAudio(float *audioBuffer, s32 samplesPerFrame);
+ u16 Platform_GetKeyInput(void);
+ u8 Platform_GetBorderBackgroundCount(void);
+ u8 Platform_GetBorderBackground(void);
++// Emerald Arena's real-time battles, switchable in the touch overlay's
++// settings. Persisted in pokeemerald.cfg; on by default.
++bool8 Platform_ArenaEnabled(void);
+ void Platform_SetBorderBackground(u8 selection);
+ 
+ enum PlatformSetting
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index b991f1d93..b01bc1cc5 100644
+index b991f1d93..3c999afb5 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -794,6 +794,13 @@ static void StoreSaveFile()
+@@ -67,6 +67,7 @@ static char sConfigPath[1024] = "pokeemerald.cfg";
+ static u8 sBorderBackground;
+ static bool sHasBorderBackgroundConfig;
+ static u8 sBackgroundOrderVersion;
++static bool8 sArenaEnabled = TRUE;
+ static u8 sPlatformSettings[PLATFORM_SETTING_COUNT] = {0, 4, 0, 1, 1, 10};
+ #ifdef __ANDROID__
+ static SDL_GameController *androidController;
+@@ -426,6 +427,13 @@ int main(int argc, char **argv)
+     ReadSaveFile(sSavePath);
+     ReadConfigFile();
+ 
++    // POKE_ARENA=0/1 overrides the saved switch, for headless tests.
++    {
++        const char *ar = SDL_getenv("POKE_ARENA");
++
++        if (ar != NULL)
++            sArenaEnabled = ar[0] != '0';
++    }
+     // Headless tests need to reach deep into the game in CI-sized time; at
+     // real speed 150s is only ~9000 frames, not enough to leave the truck.
+     {
+@@ -749,6 +757,8 @@ static void ReadConfigFile(void)
+             sPlatformSettings[PLATFORM_SETTING_VSYNC] = value != 0;
+         else if (sscanf(line, "border=%u", &value) == 1)
+             sPlatformSettings[PLATFORM_SETTING_BORDER] = value != 0;
++        else if (sscanf(line, "arena=%u", &value) == 1)
++            sArenaEnabled = value != 0;
+         else if (sscanf(line, "volume=%u", &value) == 1 && value <= 10)
+             sPlatformSettings[PLATFORM_SETTING_VOLUME] = value;
+     }
+@@ -769,6 +779,7 @@ static void StoreConfigFile(void)
+     fprintf(configFile, "vsync=%u\n", sPlatformSettings[PLATFORM_SETTING_VSYNC]);
+     fprintf(configFile, "border=%u\n", sPlatformSettings[PLATFORM_SETTING_BORDER]);
+     fprintf(configFile, "volume=%u\n", sPlatformSettings[PLATFORM_SETTING_VOLUME]);
++    fprintf(configFile, "arena=%u\n", sArenaEnabled ? 1 : 0);
+     fclose(configFile);
+ }
+ 
+@@ -794,6 +805,13 @@ static void StoreSaveFile()
      {
          fseek(sSaveFile, 0, SEEK_SET);
          fwrite(FLASH_BASE, 1, sizeof(FLASH_BASE), sSaveFile);
@@ -1944,10 +2042,43 @@ index b991f1d93..b01bc1cc5 100644
      }
  }
  
-@@ -901,6 +908,14 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
+@@ -865,6 +883,11 @@ void Platform_SetBorderBackground(u8 selection)
+     StoreConfigFile();
+ }
+ 
++bool8 Platform_ArenaEnabled(void)
++{
++    return sArenaEnabled;
++}
++
+ u8 Platform_GetSetting(enum PlatformSetting setting)
+ {
+     return sPlatformSettings[setting];
+@@ -901,6 +924,35 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
      return Platform_GetBorderBackground();
  }
  
++// Emerald Arena switch for the settings panel. Whether the arena is compiled
++// in at all is known from a weak reference to its entry point: a build with
++// EMERALD_ARENA=0 has no such symbol, and the panel hides the switch.
++extern bool8 RealtimeArena_TryStart(void) __attribute__((weak));
++
++JNIEXPORT jboolean JNICALL Java_com_pokeemerald_experimental_GbaControlsView_isArenaBuilt(JNIEnv *env, jclass clazz)
++{
++    return RealtimeArena_TryStart != NULL;
++}
++
++JNIEXPORT jboolean JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getArenaEnabled(JNIEnv *env, jclass clazz)
++{
++    return sArenaEnabled;
++}
++
++JNIEXPORT void JNICALL Java_com_pokeemerald_experimental_GbaControlsView_setArenaEnabled(JNIEnv *env, jclass clazz, jboolean on)
++{
++    sArenaEnabled = on ? TRUE : FALSE;
++    StoreConfigFile();
++}
++
 +// The touch overlay's theme picker. 0..count-1 are BG.png/BGn.png and count
 +// is BACKGROUND OFF, the same range the game's own options menu cycles.
 +JNIEXPORT void JNICALL Java_com_pokeemerald_experimental_GbaControlsView_setBorderBackground(JNIEnv *env, jclass clazz, jint background)

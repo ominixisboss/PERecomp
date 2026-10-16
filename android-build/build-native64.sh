@@ -160,11 +160,20 @@ for f in $(seq 1600 30 2200); do ARENA_ROUTE="$ARENA_ROUTE $f=SELECT"; done
 for f in $(seq 3000 40 3600); do ARENA_ROUTE="$ARENA_ROUTE $f=A"; done
 ARENA_ROUTE="$ARENA_ROUTE 4000=LR"
 ARENA_SEEDS=""
-[ -f src/realtime_arena.c ] && ARENA_SEEDS="${ARENA_FUZZ_SEEDS:-101 102 103}"
+ARENA_OFF_SEED=""
+if [ -f src/realtime_arena.c ]; then
+    ARENA_SEEDS="${ARENA_FUZZ_SEEDS:-101 102 103}"
+    # The same arena route with the player's switch off (POKE_ARENA=0): every
+    # battle must stay classic. Checked below by counting arena starts.
+    ARENA_OFF_SEED=199
+fi
+ALL_SEEDS="0 $SEEDS $ARENA_SEEDS $ARENA_OFF_SEED"
 
 run_one() {  # run_one <seed> -- 0 means the fixed route with no fuzzing
     local seed=$1 dir="run-$1" keys="$AUTOKEYS"
-    case " $ARENA_SEEDS " in *" $seed "*) keys="$ARENA_ROUTE" ;; esac
+    local arena=""
+    case " $ARENA_SEEDS $ARENA_OFF_SEED " in *" $seed "*) keys="$ARENA_ROUTE" ;; esac
+    [ "$seed" = "$ARENA_OFF_SEED" ] && arena="POKE_ARENA=0"
     rm -rf "$dir"; mkdir -p "$dir"
     # `|| st=$?`: a surviving run ends in timeout's 124, and under set -e a
     # bare nonzero status would abort here before recording it.
@@ -173,22 +182,38 @@ run_one() {  # run_one <seed> -- 0 means the fixed route with no fuzzing
     # controllers and move animations get exercised this early in the story.
     local st=0 battles=""
     [ "$seed" != 0 ] && battles="POKE_TEST_BATTLES=1"
-    ( cd "$dir" && env $battles SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy POKE_TIMESCALE=20 \
+    ( cd "$dir" && env $battles $arena SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy POKE_TIMESCALE=20 \
         POKE_FUZZ="$seed" POKE_AUTOKEYS="$keys" \
         timeout "$RUN_SECONDS" ../pokeemerald > run.log 2>&1 ) || st=$?
     echo "$st" > "$dir/status"
 }
 
-log "Running route + fuzz seeds ($SEEDS) + arena seeds (${ARENA_SEEDS:-none}) for ${RUN_SECONDS}s each at 20x"
-for seed in 0 $SEEDS $ARENA_SEEDS; do run_one "$seed" & done
+log "Running route + fuzz seeds ($SEEDS) + arena seeds (${ARENA_SEEDS:-none}, off: ${ARENA_OFF_SEED:-none}) for ${RUN_SECONDS}s each at 20x"
+for seed in $ALL_SEEDS; do run_one "$seed" & done
 wait
 
 fail=0
-for seed in 0 $SEEDS $ARENA_SEEDS; do
+for seed in $ALL_SEEDS; do
     dir="run-$seed"; status=$(cat "$dir/status")
     reached=$(grep -a "autokeys frame" "$dir/run.log" | tail -1 | sed 's/.*autokeys //')
+    starts=$(grep -ac "ARENA BATTLE START" "$dir/run.log" || true)
+    battles=$(grep -ac "TESTBATTLE" "$dir/run.log" || true)
+    # Surviving is not enough for the arena seeds: prove the arena actually
+    # ran when on, and never ran when switched off.
+    case " $ARENA_SEEDS " in *" $seed "*)
+        if [ "$starts" -lt 1 ]; then
+            echo "FAIL seed $seed: no battle entered the arena (switch on)"; fail=1
+        fi ;;
+    esac
+    if [ "$seed" = "$ARENA_OFF_SEED" ]; then
+        if [ "$starts" -ne 0 ]; then
+            echo "FAIL seed $seed: $starts battles entered the arena with the switch OFF"; fail=1
+        elif [ "$battles" -lt 1 ]; then
+            echo "FAIL seed $seed: no battle happened, so the switch was not exercised"; fail=1
+        fi
+    fi
     if [ "$status" -eq 124 ]; then
-        echo "PASS seed $seed: survived, last: $reached"
+        echo "PASS seed $seed: survived, $battles test battles, $starts in the arena, last: $reached"
     else
         echo "FAIL seed $seed: exit $status, last: $reached"
         [ -f "$dir/pokeemerald-crash.txt" ] && cat "$dir/pokeemerald-crash.txt"

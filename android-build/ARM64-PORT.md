@@ -792,3 +792,26 @@ press and its shadow shifts; a diagonal sinks two arms halfway. Tests pin the
 timing (down within 80ms, bounce on release, settled within 400ms, stable
 across a long frame gap) and that the shell never paints a pixel inside the
 game rectangle -- which caught the bezel's rounded corners doing exactly that.
+
+## Emerald Arena on/off
+
+The gear panel has a "Real-time battles" switch (shown only in builds that
+include the arena). It is `Platform_ArenaEnabled()` in sdl2.c, saved as
+`arena=` in pokeemerald.cfg, and the arena consults it at all three of its
+entry points: battle eligibility (`Eligible`, which gates both the battle
+takeover and the intro skip), the SELECT quick start, and the L+R field fight.
+Checked at battle start, so flipping it mid-save is safe; a battle already in
+the arena finishes there. The panel learns whether the arena is compiled in
+from a weak reference to `RealtimeArena_TryStart`. `POKE_ARENA=0/1` overrides
+it for headless runs; CI requires the arena seeds to log at least one
+`ARENA BATTLE START` and a switched-off seed to log none.
+
+## Theme art blending
+
+`make_themes.py` drew its translucent details (texture lines, stars, glints,
+embers) with ImageDraw directly on RGBA images, which writes pixels through
+instead of blending -- a 7% white line came out as a solid white stripe once
+saved as RGB, which is what made GBA Indigo striped. They are now drawn on a
+clear layer and alpha-composited. The flat-style D-pad is also one cross
+polygon instead of two overlapping translucent bars, which had doubled up in
+the middle with outlines crossing the centre.

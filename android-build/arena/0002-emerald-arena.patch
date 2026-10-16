@@ -1300,10 +1300,49 @@ index d19e5c1bf..a8fc1b7c5 100644
      DoMapLoadLoop(&gMain.state);
      SetFieldVBlankCallback();
 diff --git a/src/realtime_arena.c b/src/realtime_arena.c
-index 9cf511914..d177f6016 100644
+index 9cf511914..c57624cff 100644
 --- a/src/realtime_arena.c
 +++ b/src/realtime_arena.c
-@@ -1394,7 +1394,7 @@ static void TickPendingShots(void)
+@@ -1,5 +1,6 @@
+ #include "global.h"
+ #include "realtime_arena.h"
++#include "platform.h"
+ #include "arena_capture.h"
+ #include "item.h"
+ #include "trig.h"
+@@ -351,7 +352,7 @@ void RealtimeArena_PracticeTick(void)
+     extern const u8 EventScript_ArenaPracticeBattle[];
+     u32 i;
+     ArenaExpFieldTick();
+-    if (!FlagGet(FLAG_ARENA_PRACTICE) || gPaletteFade.active
++    if (!Platform_ArenaEnabled() || !FlagGet(FLAG_ARENA_PRACTICE) || gPaletteFade.active
+         || ArePlayerFieldControlsLocked() || ScriptContext_IsEnabled()
+         || (JOY_HELD(L_BUTTON | R_BUTTON) != (L_BUTTON | R_BUTTON))
+         || !JOY_NEW(L_BUTTON | R_BUTTON)) return;
+@@ -623,6 +624,11 @@ void RealtimeArena_ResetBattle(void)
+ 
+ static bool8 Eligible(void)
+ {
++    // The player's switch (Platform_ArenaEnabled): off means every battle is
++    // classic. Checked here, at battle start, so turning it off mid-save is
++    // safe -- a battle already in the arena finishes there.
++    if (!Platform_ArenaEnabled())
++        return FALSE;
+     gArenaCompatibilityReason=ARENA_COMPAT_LAB;
+ #if ARENA_LAB
+     if (gArenaLabMailbox.classic) return FALSE;
+@@ -1177,6 +1183,10 @@ static void CB2_ArenaInit(void)
+     ShowBg(0);
+     ShowBg(1);
+     SetVBlankCallback(VBlank_Arena);
++#ifdef PORTABLE
++    // Headless tests count these to prove the arena ran (or, switched off, did not).
++    { extern void SDL_Log(const char *, ...); SDL_Log("ARENA BATTLE START"); }
++#endif
+     SetMainCallback2(CB2_Arena);
+ }
+ 
+@@ -1394,7 +1404,7 @@ static void TickPendingShots(void)
          if(gBattleMons[side].status1&(STATUS1_SLEEP|STATUS1_FREEZE))
          {body->shotTimer=body->actionLife=body->dash=0;continue;}
          if (!body->shotTimer) continue;
@@ -1312,7 +1351,7 @@ index 9cf511914..d177f6016 100644
          // Presentation maps the profile's release to the source HitFrame.
          if (body->shotElapsed == profile->windup)
              Fire(side, body->shotSlot, body->aimX, body->aimY);
-@@ -1446,7 +1446,7 @@ static void TickPlayer(void)
+@@ -1446,7 +1456,7 @@ static void TickPlayer(void)
          body->dashX = sArena.dashRequestX; body->dashY = sArena.dashRequestY;
          DashLanding(body);
          sArena.dashBuffer = 0;
@@ -1321,7 +1360,7 @@ index 9cf511914..d177f6016 100644
              gArenaCombatTelemetry.cancelled[0]++;
          body->shotTimer = 0;
          gRealtimeArenaTelemetry.dodges++;
-@@ -1510,7 +1510,7 @@ static void AiChooseGoal(void)
+@@ -1510,7 +1520,7 @@ static void AiChooseGoal(void)
          {-256,0}, {-181,-181}, {0,-256}, {181,-181}
      };
      struct ArenaBody *body = &sArena.bodies[1];
@@ -1330,7 +1369,7 @@ index 9cf511914..d177f6016 100644
      s32 preferred = p->kind == ARENA_MOVE_MELEE ? 24 : p->kind == ARENA_MOVE_RUSH ? p->range-22
          : p->move == MOVE_HYPER_BEAM ? 100
          : p->move == MOVE_FLAMETHROWER ? 76 : p->kind == ARENA_MOVE_CONE ? 40 : 70+sArena.style*8;
-@@ -1711,7 +1711,7 @@ static void TickEnemy(void)
+@@ -1711,7 +1721,7 @@ static void TickEnemy(void)
          if(!body->cooldown)AiChooseMove(distance);
          if (!AiTryEvade())
          {
@@ -1339,7 +1378,7 @@ index 9cf511914..d177f6016 100644
              if(p->kind==ARENA_MOVE_SELF && !body->cooldown && ArenaMovePP(1,body->moveSlot))
              {
                  if(p->move==MOVE_SUBSTITUTE||p->move==MOVE_SMOKESCREEN)
-@@ -1759,7 +1759,7 @@ static void TickEnemy(void)
+@@ -1759,7 +1769,7 @@ static void TickEnemy(void)
  static void ApplyResolvedHit(u8 side,u16 move,s32 damage);
  static void ApplyMoveHit(u8 side,u16 move)
  {
@@ -1348,7 +1387,7 @@ index 9cf511914..d177f6016 100644
      u8 targetSide=profile->kind==ARENA_MOVE_SELF?side:side^1;
      struct ArenaBody *target=&sArena.bodies[targetSide];
      s32 damage;
-@@ -1861,7 +1861,7 @@ static void ApplyResolvedHit(u8 side,u16 move,s32 damage)
+@@ -1861,7 +1871,7 @@ static void ApplyResolvedHit(u8 side,u16 move,s32 damage)
                  gArenaAdventureTelemetry[1]++;
                  // A committed hit is not refunded. Cancel only the pending
                  // action and add recovery; already emitted projectiles live on.
@@ -1357,7 +1396,7 @@ index 9cf511914..d177f6016 100644
                      gArenaCombatTelemetry.cancelled[targetSide]++;
                  target->shotTimer=0;target->actionLife=0;
                  target->cooldown=max(target->cooldown,18);
-@@ -1936,7 +1936,7 @@ static void TickActions(void)
+@@ -1936,7 +1946,7 @@ static void TickActions(void)
          s16 oldX=body->x/Q,oldY=body->y/Q;
          bool8 hit=FALSE;
          if(!body->actionLife)continue;
@@ -1366,7 +1405,7 @@ index 9cf511914..d177f6016 100644
          if(p->move==MOVE_BIDE)
          {
              body->actionAge++;
-@@ -2153,7 +2153,7 @@ static void TickShots(void)
+@@ -2153,7 +2163,7 @@ static void TickShots(void)
          s16 oldX,oldY;
          s16 obstacle;
          if (!shot->life) continue;
@@ -1375,7 +1414,7 @@ index 9cf511914..d177f6016 100644
          oldX=shot->x/Q;oldY=shot->y/Q;
          target = &sArena.bodies[shot->side ^ 1];
          obstacle=ArenaNav_FirstObstacle(shot->x/Q,shot->y/Q,(shot->x+shot->vx)/Q,(shot->y+shot->vy)/Q,2);
-@@ -2461,7 +2461,7 @@ static void CB2_Arena(void)
+@@ -2461,7 +2471,7 @@ static void CB2_Arena(void)
      for (i = 0; i < 2; i++)
      {
          struct ArenaBody *body = &sArena.bodies[i];
@@ -1384,6 +1423,15 @@ index 9cf511914..d177f6016 100644
          struct Sprite *sprite = &gSprites[body->sprite];
          sprite->x = body->x / Q;
          sprite->y = body->y / Q;
+@@ -2758,7 +2768,7 @@ static void ArenaExit(bool8 fainted)
+ bool8 RealtimeArena_RequestDemo(void)
+ {
+     // A new, disposable save only. Never reset an existing player's progress.
+-    if (gSaveFileStatus != SAVE_STATUS_EMPTY) return FALSE;
++    if (gSaveFileStatus != SAVE_STATUS_EMPTY || !Platform_ArenaEnabled()) return FALSE;
+     sDemoRequested = TRUE;
+     return TRUE;
+ }
 diff --git a/src/reshow_battle_screen.c b/src/reshow_battle_screen.c
 index 17a5d3b26..706b2e687 100644
 --- a/src/reshow_battle_screen.c

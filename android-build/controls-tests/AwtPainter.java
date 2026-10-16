@@ -24,6 +24,11 @@ final class AwtPainter implements Painter {
         c(argb); Path2D.Float p = new Path2D.Float(); p.moveTo(xy[0], xy[1]);
         for (int i = 2; i < xy.length; i += 2) p.lineTo(xy[i], xy[i + 1]);
         p.closePath(); g.fill(p); }
+    public void strokePolygon(float[] xy, float w, int argb) {
+        c(argb); g.setStroke(new BasicStroke(w, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        Path2D.Float p = new Path2D.Float(); p.moveTo(xy[0], xy[1]);
+        for (int i = 2; i < xy.length; i += 2) p.lineTo(xy[i], xy[i + 1]);
+        p.closePath(); g.draw(p); }
     public void fillRectGradient(float l, float t, float r, float b, int top, int bottom, float g0, float g1) {
         g.setPaint(new GradientPaint(0, g0, new Color(top, true), 0, g1, new Color(bottom, true)));
         g.fill(new Rectangle2D.Float(l, t, r - l, b - t)); }

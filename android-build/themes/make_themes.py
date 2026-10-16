@@ -35,6 +35,23 @@ def sprite(name, scale, frame=0):
     return rgba.resize((64 * scale, 64 * scale), Image.NEAREST)
 
 
+class Layer:
+    """Translucent drawing that actually blends. ImageDraw on an RGBA image
+    writes pixels through, alpha and all -- so a 7%-white line became a solid
+    white stripe once saved as RGB. Draw on a clear overlay instead, then
+    composite it over the image."""
+    def __init__(self, img):
+        self.img = img
+        self.ov = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        self.d = ImageDraw.Draw(self.ov)
+
+    def __enter__(self):
+        return self.d
+
+    def __exit__(self, *exc):
+        self.img.alpha_composite(self.ov)
+
+
 def gradient(top, bottom, h=H):
     g = Image.new('RGB', (W, h))
     d = ImageDraw.Draw(g)
@@ -58,12 +75,13 @@ def place(img, spr, pos, drop=True):
 
 
 def stars(img, n, seed, box=(0, 0, W, H), color=(255, 255, 255)):
-    r = random.Random(seed); d = ImageDraw.Draw(img)
-    for _ in range(n):
-        x = r.randrange(box[0], box[2]); y = r.randrange(box[1], box[3])
-        s = r.choice([1, 1, 1, 2, 2, 3])
-        a = r.randrange(120, 255)
-        d.rectangle([x, y, x + s, y + s], fill=color + (a,))
+    r = random.Random(seed)
+    with Layer(img) as d:
+        for _ in range(n):
+            x = r.randrange(box[0], box[2]); y = r.randrange(box[1], box[3])
+            s = r.choice([1, 1, 1, 2, 2, 3])
+            a = r.randrange(120, 255)
+            d.rectangle([x, y, x + s, y + s], fill=color + (a,))
 
 
 def clouds_layer(img, y, scale, seed, alpha=200):
@@ -105,10 +123,11 @@ def hoenn_sunset():
         d.ellipse([x0 - 90, 380, x0 + 90, 560], fill=(255, 220, 140, 255))
     img.alpha_composite(sea, (0, 520))
     r = random.Random(4)
-    for y in range(540, H, 22):    # glints
-        for _ in range(10):
-            x = r.randrange(0, W); w = r.randrange(20, 70)
-            d.line([(x, y), (x + w, y)], fill=(255, 200, 150, r.randrange(60, 150)), width=3)
+    with Layer(img) as d:
+        for y in range(540, H, 22):    # glints
+            for _ in range(10):
+                x = r.randrange(0, W); w = r.randrange(20, 70)
+                d.line([(x, y), (x + w, y)], fill=(255, 200, 150, r.randrange(60, 150)), width=3)
     place(img, sprite('kyogre', 4), (-20, 470))
     place(img, sprite('wailord', 4).transpose(Image.FLIP_LEFT_RIGHT), (W - 270, 470))
     return img
@@ -116,17 +135,17 @@ def hoenn_sunset():
 
 def magma():
     img = gradient((40, 8, 8), (150, 40, 10)).convert('RGBA')
-    d = ImageDraw.Draw(img)
     r = random.Random(5)
-    for _ in range(26):                # lava cracks
-        x = r.randrange(0, W); y = r.randrange(600, H)
-        pts = [(x, y)]
-        for _ in range(6):
-            x += r.randrange(-60, 60); y += r.randrange(-30, 30); pts.append((x, y))
-        d.line(pts, fill=(255, 140, 30, 220), width=r.randrange(3, 7))
-    for _ in range(90):                # embers
-        x = r.randrange(0, W); y = r.randrange(0, H); s = r.randrange(2, 6)
-        d.ellipse([x, y, x + s, y + s], fill=(255, r.randrange(120, 220), 40, r.randrange(120, 255)))
+    with Layer(img) as d:
+        for _ in range(26):                # lava cracks
+            x = r.randrange(0, W); y = r.randrange(600, H)
+            pts = [(x, y)]
+            for _ in range(6):
+                x += r.randrange(-60, 60); y += r.randrange(-30, 30); pts.append((x, y))
+            d.line(pts, fill=(255, 140, 30, 220), width=r.randrange(3, 7))
+        for _ in range(90):                # embers
+            x = r.randrange(0, W); y = r.randrange(0, H); s = r.randrange(2, 6)
+            d.ellipse([x, y, x + s, y + s], fill=(255, r.randrange(120, 220), 40, r.randrange(120, 255)))
     img = img.filter(ImageFilter.GaussianBlur(0.6))
     place(img, sprite('groudon', 5), (-70, 330))
     place(img, sprite('groudon', 5).transpose(Image.FLIP_LEFT_RIGHT), (W - 250, 330))
@@ -154,7 +173,7 @@ def eon_night():
     stars(img, 420, 8)
     d = ImageDraw.Draw(img)
     d.ellipse([60, 60, 200, 200], fill=(250, 245, 220, 255))      # moon
-    d.ellipse([95, 50, 235, 190], fill=(8, 10, 40, 0))
+    d.ellipse([95, 50, 235, 190], fill=(12, 13, 47, 255))
     place(img, sprite('latias', 4), (-10, 360))
     place(img, sprite('latios', 4).transpose(Image.FLIP_LEFT_RIGHT), (W - 260, 300))
     return img
@@ -162,14 +181,11 @@ def eon_night():
 
 def gba_indigo():
     img = gradient((70, 58, 150), (48, 38, 110)).convert('RGBA')
-    d = ImageDraw.Draw(img)
-    for x0 in (90, W - 210):           # speaker grilles
-        for row in range(6):
-            for col in range(6):
-                cx = x0 + col * 22 + (row % 2) * 11; cy = 560 + row * 22
-                d.ellipse([cx, cy, cx + 9, cy + 9], fill=(30, 22, 80, 255))
-    for y in range(0, H, 6):           # faint plastic texture
-        d.line([(0, y), (W, y)], fill=(255, 255, 255, 6))
+    # Faint moulded-plastic texture. (No speaker grille: wherever it goes in
+    # the side bands, the on-screen A/B or D-pad sits on top of it.)
+    with Layer(img) as d:
+        for y in range(0, H, 6):
+            d.line([(0, y), (W, y)], fill=(255, 255, 255, 7))
     return img
 
 

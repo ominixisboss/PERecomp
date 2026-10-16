@@ -19,7 +19,7 @@ to allow installing from an unknown source.
 | | |
 |---|---|
 | **64-bit port** | The fork only ever ran as a 32-bit program. This is its first 64-bit build: every pointer-width assumption in the game code and data was found and fixed (details below). |
-| **[Emerald Arena](https://github.com/GBurgardt/pokemon-emerald-arena)** v0.13.0 by GBurgardt | Real-time battles: supported wild and single-trainer battles are fought by moving, aiming and dodging. Others stay classic. On a fresh save, press **SELECT** on NEW GAME for a quick start, then **L+R** in the field to fight. |
+| **[Emerald Arena](https://github.com/GBurgardt/pokemon-emerald-arena)** v0.13.0 by GBurgardt | Real-time battles: supported wild and single-trainer battles are fought by moving, aiming and dodging. Others stay classic. On a fresh save, press **SELECT** on NEW GAME for a quick start, then **L+R** in the field to fight. **Switch it off** in the gear panel (Game → Real-time battles) and every battle is classic; the setting is saved, and you can flip it any time. |
 | **Touch controls** | A one-piece D-pad you can roll your thumb around (with diagonals), A/B, START/SELECT, L/R, plus arena buttons: **BALL** (L+R in one tap) and **< >** to switch attacks. Vibration, size, opacity and a drag-to-move layout editor. |
 | **Themes** | 9 screen backgrounds and 8 handheld shells, which draw a whole handheld around the game with animated buttons and a pivoting D-pad. 16 button styles. All from the **gear** button (left side, under SELECT). |
 | **Saves** | Every build is signed with one permanent key, so a new APK installs over the old one and keeps the save. The save is copied to `Downloads/PokemonEmerald` whenever you leave the game, and the gear panel can back up or restore it. |
@@ -47,7 +47,9 @@ pointer bugs that crash a phone crash it too. CI then plays it headless at 20× 
 
 - a scripted route through the intro, out of the moving truck and into Littleroot;
 - four seeds of random play with a random wild battle whenever the player is free;
-- three seeds of Emerald Arena's quick start with random real-time fighting.
+- three seeds of Emerald Arena's quick start with random real-time fighting, each
+  required to actually enter the arena, and one with the arena switched off,
+  required never to.
 
 Any crash fails the build, and its log names the function. Static checks also run:
 zero compiler-reported pointer truncations, no misaligned pointer tables in the
