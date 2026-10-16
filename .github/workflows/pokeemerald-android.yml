@@ -321,8 +321,11 @@ jobs:
             Downloads/PokemonEmerald whenever you leave it, and the gear panel can
             back up or restore a save file.
 
-            **Controls & themes:** tap the gear (left side, under SELECT) to pick
-            one of 9 screen themes or 8 animated handheld shells, 16 button styles, change button size and
+            **Controls & themes:** tap the gear (left side, under SELECT), then
+            **Browse themes** for a gallery of 56 themes in seven categories --
+            12 animated handheld shells, Hoenn scenes, weather, the game's own
+            PC box wallpapers, box pals, classic and minimal. Also 25 button
+            styles, button size and
             opacity, toggle vibration, arena buttons and diagonals, or drag the
             buttons wherever you like. The D-pad is one disc you can roll your
             thumb around; **BALL** is L+R in one tap; **< >** switch attacks.

@@ -21,7 +21,7 @@ to allow installing from an unknown source.
 | **64-bit port** | The fork only ever ran as a 32-bit program. This is its first 64-bit build: every pointer-width assumption in the game code and data was found and fixed (details below). |
 | **[Emerald Arena](https://github.com/GBurgardt/pokemon-emerald-arena)** v0.13.0 by GBurgardt | Real-time battles: supported wild and single-trainer battles are fought by moving, aiming and dodging. Others stay classic. On a fresh save, press **SELECT** on NEW GAME for a quick start, then **L+R** in the field to fight. **Switch it off** in the gear panel (Game → Real-time battles) and every battle is classic; the setting is saved, and you can flip it any time. |
 | **Touch controls** | A one-piece D-pad you can roll your thumb around (with diagonals), A/B, START/SELECT, L/R, plus arena buttons: **BALL** (L+R in one tap) and **< >** to switch attacks. Vibration, size, opacity and a drag-to-move layout editor. |
-| **Themes** | 9 screen backgrounds and 8 handheld shells, which draw a whole handheld around the game with animated buttons and a pivoting D-pad. 16 button styles. All from the **gear** button (left side, under SELECT). |
+| **Themes** | A gallery of 56 themes in seven categories, each card a live miniature of how it looks: **Handhelds** (12 shells that draw a whole handheld around the game, with animated buttons and a pivoting D-pad), **Hoenn** scenes, **Weather** (the game's own rain, snow, ash, sandstorm, fog and bubbles), **PC Box** (the game's box wallpapers, decoded from its own tiles), **Box Pals**, **Classic** and **Minimal**. Every theme picks a matching button style; 25 styles in all. Gear button (left side, under SELECT) → **Browse themes**. |
 | **Saves** | Every build is signed with one permanent key, so a new APK installs over the old one and keeps the save. The save is copied to `Downloads/PokemonEmerald` whenever you leave the game, and the gear panel can back up or restore it. |
 | **60fps** | Frame pacing that sleeps instead of spinning a CPU core, and catches up without slowing the game when the phone falls behind. |
 
@@ -33,7 +33,7 @@ to allow installing from an unknown source.
 | [`android-build/arena/`](android-build/arena) + [`emerald-arena.sh`](android-build/emerald-arena.sh) | Fetches Emerald Arena at a pinned commit and applies its engine patch, rebased onto the fork with its 64-bit fixes. `EMERALD_ARENA=0` builds without it. |
 | [`android-build/build-android.sh`](android-build/build-android.sh) | Builds the APK. |
 | [`android-build/build-native64.sh`](android-build/build-native64.sh) | Builds the same code as a 64-bit desktop program and plays it headless. This is CI's crash test (see below). |
-| [`android-build/themes/`](android-build/themes) | Generates the background themes from the game's own sprites at build time, and softens the fork's two painted ones so buttons read over them. |
+| [`android-build/themes/`](android-build/themes) | Generates the background themes at build time from the game's own graphics (sprites, PC box wallpapers, weather effects), and softens the fork's two painted ones so buttons read over them. |
 | [`android-build/controls-tests/`](android-build/controls-tests) | Tests and image previews for the touch controls, running the app's real layout and drawing code on a plain JVM. |
 | [`.github/workflows/pokeemerald-android.yml`](.github/workflows/pokeemerald-android.yml) | Builds both APKs, runs the crash test, and publishes the `latest` release. |
 | [`android-build/ARM64-PORT.md`](android-build/ARM64-PORT.md) | The engineering log: every bug found, how, and how it was fixed. |
@@ -57,7 +57,8 @@ hand-assembled game data, and every bytecode command handler cross-checked again
 the macro that encodes it.
 
 The themes are checked too. Every background is laid under the app's real
-control layout at four phone shapes. Under each button the art must be calm
+control layout at four phone shapes, and the theme list in the app is checked
+against what the generator actually made, number by number. Under each button the art must be calm
 (no sprite edges or bright moons behind a label) and the label must keep a 3:1
 contrast. Every button style's ink must read on each face it is drawn on.
 

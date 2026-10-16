@@ -129,10 +129,10 @@ index 000000000..44f3cbe4b
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
 new file mode 100644
-index 000000000..7f5639f8e
+index 000000000..5d943baa9
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/ControlsSettingsDialog.java
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,234 @@
 +package com.pokeemerald.experimental;
 +
 +import android.app.AlertDialog;
@@ -185,29 +185,33 @@ index 000000000..7f5639f8e
 +            realtime = null;
 +        }
 +
-+        // Theme: only the ones whose background is actually packaged.
-+        final List<Themes> themes = new ArrayList<>();
-+        List<String> themeNames = new ArrayList<>();
-+        for (Themes t : Themes.ALL) {
-+            if (t.isShell() || GbaControlsView.backgroundExists(c, t.background)) { themes.add(t); themeNames.add(t.name); }
-+        }
-+        themeNames.add("None (black)");
-+        Spinner theme = spinner(c, themeNames);
-+        int current = GbaControlsView.getBorderBackground(), selected = themes.size();
-+        for (int i = 0; i < themes.size(); i++) {
-+            Themes t = themes.get(i);
-+            boolean on = view.shellActive() ? t == Themes.ALL[s.shellTheme] : (!t.isShell() && t.background == current);
-+            if (on) selected = i;
-+        }
-+        theme.setSelection(selected, false);
++        // Theme: opens the gallery; its name here follows what was picked.
 +        header(col, c, "Theme");
-+        col.addView(theme);
++        LinearLayout themeRow = new LinearLayout(c);
++        themeRow.setOrientation(LinearLayout.HORIZONTAL);
++        themeRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
++        TextView themeName = new TextView(c);
++        themeName.setTextSize(16);
++        themeName.setTextColor(0xFFFFFFFF);
++        Button browse = new Button(c);
++        browse.setText("Browse themes");
++        themeRow.addView(themeName, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
++        themeRow.addView(browse);
++        col.addView(themeRow);
++        Runnable showTheme = () -> themeName.setText(currentThemeName(view));
++        showTheme.run();
 +
++        // Button styles, grouped: flat ones, then the handheld shells. The
++        // stored value stays the style's index in ButtonStyle.ALL.
++        final List<Integer> styleIndex = new ArrayList<>();
 +        List<String> styleNames = new ArrayList<>();
++        styleIndex.add(Settings.MATCH_THEME);
 +        styleNames.add("Match theme");
-+        for (ButtonStyle b : ButtonStyle.ALL) styleNames.add(b.name);
++        for (boolean shells : new boolean[] {false, true})
++            for (int i = 0; i < ButtonStyle.ALL.length; i++)
++                if (ButtonStyle.ALL[i].gba == shells) { styleIndex.add(i); styleNames.add(ButtonStyle.ALL[i].name); }
 +        Spinner style = spinner(c, styleNames);
-+        style.setSelection(s.style + 1, false);
++        style.setSelection(Math.max(0, styleIndex.indexOf(s.style)), false);
 +        header(col, c, "Button style");
 +        col.addView(style);
 +
@@ -261,20 +265,10 @@ index 000000000..7f5639f8e
 +                .create();
 +
 +        // Every change applies immediately, so the result is visible behind the panel.
-+        theme.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-+            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-+                // "None" and the handheld shells are the game's BACKGROUND OFF
-+                // (one past the last image); a shell is then drawn by the overlay.
-+                Themes t = pos < themes.size() ? themes.get(pos) : null;
-+                s.shellTheme = t != null && t.isShell() ? java.util.Arrays.asList(Themes.ALL).indexOf(t) : -1;
-+                GbaControlsView.setBorderBackground(t != null && !t.isShell() ? t.background : view.backgroundOff());
-+                view.settingsChanged();
-+            }
-+            @Override public void onNothingSelected(AdapterView<?> p) {}
-+        });
++        browse.setOnClickListener(v -> ThemeGallery.show(view, showTheme));
 +        style.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
 +            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-+                s.style = pos - 1;
++                s.style = styleIndex.get(pos);
 +                view.settingsChanged();
 +            }
 +            @Override public void onNothingSelected(AdapterView<?> p) {}
@@ -322,6 +316,13 @@ index 000000000..7f5639f8e
 +        dialog.show();
 +    }
 +
++    /** The theme in use, for the panel: a shell, a picture, or none. */
++    private static String currentThemeName(GbaControlsView view) {
++        if (view.shellActive()) return "Handheld " + Themes.ALL[view.settings().shellTheme].name;
++        int i = Themes.forBackground(GbaControlsView.getBorderBackground());
++        return i >= 0 ? Themes.ALL[i].name + " \u00b7 " + Themes.ALL[i].category : "None (black)";
++    }
++
 +    private abstract static class Seek implements SeekBar.OnSeekBarChangeListener {
 +        @Override public void onStartTrackingTouch(SeekBar b) {}
 +        @Override public void onStopTrackingTouch(SeekBar b) {}
@@ -367,7 +368,7 @@ index 000000000..7f5639f8e
 +    }
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
-index 7f1cea0b5..56ceefa41 100644
+index 7f1cea0b5..32aa1e5f3 100644
 --- a/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/GbaControlsView.java
 @@ -1,188 +1,294 @@
@@ -474,7 +475,7 @@ index 7f1cea0b5..56ceefa41 100644
 +        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        settings = Settings.parse(prefs.getString(KEY, null));
 +        int n = 0;
-+        while (n < 15 && backgroundExists(context, n)) n++;
++        while (n < 64 && backgroundExists(context, n)) n++;   // MAX_BORDER_BACKGROUNDS in sdl2.c
 +        backgroundCount = n;
 +        try (InputStream in = context.getAssets().open("Border.png")) {
 +            border = BitmapFactory.decodeStream(in);
@@ -748,7 +749,7 @@ index 7f1cea0b5..56ceefa41 100644
 -            Paint.FontMetrics metrics = text.getFontMetrics();
 -            float baseline = rect.centerY() - (metrics.ascent + metrics.descent) / 2;
 -            canvas.drawText(label, rect.centerX(), baseline, text);
-+    /** Loads only the background in use: fifteen 1600x900 bitmaps would be ~85MB. */
++    /** Loads only the background in use: dozens of 1600x900 bitmaps would be hundreds of MB. */
 +    private Bitmap backgroundFor(int index) {
 +        if (index != backgroundLoaded) {
 +            if (background != null) background.recycle();
@@ -1100,12 +1101,315 @@ index 000000000..690d37e72
 +        Runtime.getRuntime().exit(0);
 +    }
 +}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/ThemeGallery.java b/android/app/src/main/java/com/pokeemerald/experimental/ThemeGallery.java
+new file mode 100644
+index 000000000..d0370503b
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/ThemeGallery.java
+@@ -0,0 +1,297 @@
++package com.pokeemerald.experimental;
++
++import android.app.Dialog;
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Rect;
++import android.graphics.Typeface;
++import android.graphics.drawable.GradientDrawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.util.LruCache;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.Window;
++import android.view.WindowManager;
++import android.widget.FrameLayout;
++import android.widget.HorizontalScrollView;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.ScrollView;
++import android.widget.TextView;
++
++import java.io.IOException;
++import java.io.InputStream;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++import com.pokeemerald.experimental.controls.ThemeCard;
++import com.pokeemerald.experimental.controls.Themes;
++
++/**
++ * The theme picker: category tabs over a grid of cards, each a miniature of
++ * the theme as it looks on the phone (its background, a stand-in screen and
++ * its matching buttons). Tapping a card applies it at once.
++ */
++final class ThemeGallery {
++    private ThemeGallery() {}
++
++    private static final int ACCENT = 0xFF2FB87E, CARD_BG = 0xFF1E232B, PANEL = 0xF2121519;
++    private static final int THUMB_W = 360, THUMB_H = THUMB_W * ThemeCard.H / ThemeCard.W;
++
++    /** Rendered cards, kept across openings (about 15MB at most). */
++    private static final LruCache<String, Bitmap> cache = new LruCache<String, Bitmap>(16 * 1024 * 1024) {
++        @Override protected int sizeOf(String key, Bitmap b) { return b.getByteCount(); }
++    };
++    private static final ExecutorService worker = Executors.newSingleThreadExecutor();
++
++    /** "None" is shown as the last card of Minimal. */
++    private static final String NONE = "none";
++
++    static void show(GbaControlsView view, Runnable onChange) {
++        Context c = view.getContext();
++        Dialog dialog = new Dialog(c, android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen);
++        Window win = dialog.getWindow();
++        if (win != null) win.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
++
++        LinearLayout root = new LinearLayout(c);
++        root.setOrientation(LinearLayout.VERTICAL);
++        root.setBackgroundColor(PANEL);
++        int pad = dp(c, 12);
++        root.setPadding(pad, pad / 2, pad, 0);
++
++        // Title row: "Themes", what is on now, and Done.
++        LinearLayout top = new LinearLayout(c);
++        top.setGravity(Gravity.CENTER_VERTICAL);
++        TextView title = label(c, "Themes", 22, Color.WHITE, true);
++        TextView current = label(c, "", 14, 0xFFB8C2CC, false);
++        current.setPadding(dp(c, 16), 0, 0, 0);
++        TextView done = label(c, "Done", 16, ACCENT, true);
++        done.setPadding(dp(c, 16), dp(c, 8), dp(c, 8), dp(c, 8));
++        top.addView(title);
++        top.addView(current, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
++        top.addView(done);
++        root.addView(top);
++
++        // Category tabs.
++        HorizontalScrollView tabScroll = new HorizontalScrollView(c);
++        tabScroll.setHorizontalScrollBarEnabled(false);
++        LinearLayout tabs = new LinearLayout(c);
++        tabs.setPadding(0, dp(c, 4), 0, dp(c, 8));
++        tabScroll.addView(tabs);
++        root.addView(tabScroll);
++
++        ScrollView gridScroll = new ScrollView(c);
++        LinearLayout grid = new LinearLayout(c);
++        grid.setOrientation(LinearLayout.VERTICAL);
++        grid.setPadding(0, 0, 0, pad);
++        gridScroll.addView(grid);
++        root.addView(gridScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
++
++        dialog.setContentView(root);
++
++        final State st = new State(view, onChange, current, grid, tabs);
++        for (String cat : Themes.CATEGORIES) {
++            TextView tab = label(c, cat + "  " + count(cat), 15, Color.WHITE, true);
++            tab.setPadding(dp(c, 14), dp(c, 8), dp(c, 14), dp(c, 8));
++            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
++                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++            lp.rightMargin = dp(c, 8);
++            tab.setOnClickListener(v -> st.showCategory(cat));
++            tab.setTag(cat);
++            tabs.addView(tab, lp);
++        }
++        done.setOnClickListener(v -> dialog.dismiss());
++        st.showCategory(st.currentCategory());
++        st.updateCurrent();
++        dialog.show();
++    }
++
++    private static int count(String cat) {
++        return Themes.in(cat).size() + (Themes.MINIMAL.equals(cat) ? 1 : 0);
++    }
++
++    /** What the gallery is showing, and the cards on screen. */
++    private static final class State {
++        final GbaControlsView view;
++        final Runnable onChange;
++        final TextView current;
++        final LinearLayout grid, tabs;
++        final List<View> cards = new ArrayList<>();
++        final Handler main = new Handler(Looper.getMainLooper());
++
++        State(GbaControlsView view, Runnable onChange, TextView current, LinearLayout grid, LinearLayout tabs) {
++            this.view = view; this.onChange = onChange; this.current = current; this.grid = grid; this.tabs = tabs;
++        }
++
++        /** The id of the theme in use: a shell, a picture, or none. */
++        String currentId() {
++            if (view.shellActive()) return Themes.ALL[view.settings().shellTheme].id;
++            int i = Themes.forBackground(GbaControlsView.getBorderBackground());
++            return i >= 0 ? Themes.ALL[i].id : NONE;
++        }
++
++        String currentCategory() {
++            int i = Themes.indexOf(currentId());
++            return i >= 0 ? Themes.ALL[i].category : Themes.MINIMAL;
++        }
++
++        void updateCurrent() {
++            int i = Themes.indexOf(currentId());
++            current.setText(i >= 0 ? "Now: " + Themes.ALL[i].name + " (" + Themes.ALL[i].category + ")" : "Now: None");
++            for (View card : cards) highlight(card, card.getTag().equals(currentId()));
++        }
++
++        void showCategory(String cat) {
++            Context c = view.getContext();
++            for (int i = 0; i < tabs.getChildCount(); i++) {
++                View tab = tabs.getChildAt(i);
++                GradientDrawable g = new GradientDrawable();
++                g.setCornerRadius(dp(c, 18));
++                boolean on = cat.equals(tab.getTag());
++                g.setColor(on ? ACCENT : 0xFF2A3038);
++                tab.setBackground(g);
++            }
++            grid.removeAllViews();
++            cards.clear();
++            List<String> ids = new ArrayList<>();
++            for (Themes t : Themes.in(cat)) {
++                // a picture theme whose image is not packaged is left out
++                if (t.isShell() || GbaControlsView.backgroundExists(c, t.background)) ids.add(t.id);
++            }
++            if (Themes.MINIMAL.equals(cat)) ids.add(NONE);
++
++            int width = c.getResources().getDisplayMetrics().widthPixels - dp(c, 24);
++            int cols = Math.max(2, Math.min(5, width / dp(c, 200)));
++            int gap = dp(c, 10);
++            LinearLayout row = null;
++            for (int k = 0; k < ids.size(); k++) {
++                if (k % cols == 0) {
++                    row = new LinearLayout(c);
++                    row.setPadding(0, 0, 0, gap);
++                    grid.addView(row);
++                }
++                View card = card(c, ids.get(k));
++                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
++                lp.rightMargin = k % cols == cols - 1 ? 0 : gap;
++                row.addView(card, lp);
++                cards.add(card);
++            }
++            // pad the last row so its cards keep the same width
++            if (row != null)
++                for (int k = ids.size() % cols; k != 0 && k < cols; k++) {
++                    View filler = new View(c);
++                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, 1, 1);
++                    lp.rightMargin = k == cols - 1 ? 0 : gap;
++                    row.addView(filler, lp);
++                }
++            updateCurrent();
++        }
++
++        View card(Context c, String id) {
++            LinearLayout card = new LinearLayout(c);
++            card.setOrientation(LinearLayout.VERTICAL);
++            card.setTag(id);
++            int p = dp(c, 4);
++            card.setPadding(p, p, p, p);
++            ImageView image = new ImageView(c) {
++                @Override protected void onMeasure(int w, int h) {
++                    int width = MeasureSpec.getSize(w);
++                    setMeasuredDimension(width, width * ThemeCard.H / ThemeCard.W);
++                }
++            };
++            image.setScaleType(ImageView.ScaleType.FIT_XY);
++            image.setBackgroundColor(0xFF0C0E12);
++            card.addView(image);
++            int i = Themes.indexOf(id);
++            TextView name = label(c, i >= 0 ? Themes.ALL[i].name : "None (black)", 13, 0xFFE6EAF0, false);
++            name.setPadding(dp(c, 2), dp(c, 4), 0, dp(c, 2));
++            card.addView(name);
++            card.setOnClickListener(v -> apply(id));
++
++            Bitmap cached = cache.get(id);
++            if (cached != null) {
++                image.setImageBitmap(cached);
++            } else {
++                Context app = c.getApplicationContext();
++                worker.execute(() -> {
++                    Bitmap b = render(app, id);
++                    if (b == null) return;
++                    cache.put(id, b);
++                    main.post(() -> image.setImageBitmap(b));
++                });
++            }
++            return card;
++        }
++
++        void apply(String id) {
++            int i = Themes.indexOf(id);
++            Themes t = i >= 0 ? Themes.ALL[i] : null;
++            // "None" and the handheld shells are the game's BACKGROUND OFF
++            // (one past the last picture); a shell is then drawn by the overlay.
++            view.settings().shellTheme = t != null && t.isShell() ? i : -1;
++            GbaControlsView.setBorderBackground(t != null && !t.isShell() ? t.background : view.backgroundOff());
++            view.settingsChanged();
++            updateCurrent();
++            if (onChange != null) onChange.run();
++        }
++    }
++
++    /** One card's picture, off the main thread. */
++    private static Bitmap render(Context c, String id) {
++        int i = Themes.indexOf(id);
++        Themes t = i >= 0 ? Themes.ALL[i] : null;
++        Bitmap out = Bitmap.createBitmap(THUMB_W, THUMB_H, Bitmap.Config.ARGB_8888);
++        Canvas canvas = new Canvas(out);
++        canvas.drawColor(Color.BLACK);
++        canvas.scale(THUMB_W / (float) ThemeCard.W, THUMB_H / (float) ThemeCard.H);
++        if (t != null && !t.isShell()) {
++            BitmapFactory.Options o = new BitmapFactory.Options();
++            o.inSampleSize = 2;
++            try (InputStream in = c.getAssets().open(t.background == 0 ? "BG.png" : "BG" + t.background + ".png")) {
++                Bitmap bg = BitmapFactory.decodeStream(in, null, o);
++                if (bg != null) {
++                    // cover-scale, as the overlay does
++                    float s = Math.max(ThemeCard.W / (float) bg.getWidth(), ThemeCard.H / (float) bg.getHeight());
++                    int bw = Math.round(bg.getWidth() * s), bh = Math.round(bg.getHeight() * s);
++                    canvas.drawBitmap(bg, null, new Rect((ThemeCard.W - bw) / 2, (ThemeCard.H - bh) / 2,
++                            (ThemeCard.W + bw) / 2, (ThemeCard.H + bh) / 2), new Paint(Paint.FILTER_BITMAP_FLAG));
++                    bg.recycle();
++                }
++            } catch (IOException ignored) {
++                // no picture: the card shows black around the screen
++            }
++        }
++        ThemeCard.drawOver(new CanvasPainter().on(canvas), t);
++        return out;
++    }
++
++    private static void highlight(View card, boolean on) {
++        GradientDrawable g = new GradientDrawable();
++        g.setCornerRadius(dp(card.getContext(), 8));
++        g.setColor(CARD_BG);
++        if (on) g.setStroke(dp(card.getContext(), 3), ACCENT);
++        card.setBackground(g);
++    }
++
++    private static TextView label(Context c, String text, int sp, int colour, boolean bold) {
++        TextView t = new TextView(c);
++        t.setText(text);
++        t.setTextSize(sp);
++        t.setTextColor(colour);
++        t.setSingleLine(true);
++        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
++        return t;
++    }
++
++    private static int dp(Context c, int v) {
++        return Math.round(v * c.getResources().getDisplayMetrics().density);
++    }
++}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java
 new file mode 100644
-index 000000000..502a0e752
+index 000000000..c0666feee
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ButtonStyle.java
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,86 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/** How the on-screen controls look. Alphas here are scaled by the user's opacity setting. */
@@ -1174,6 +1478,22 @@ index 000000000..502a0e752
 +        gba("Handheld Spice",    0xF07F24, 0xB85A12, 0x3A1E08, 0xF4E6D6, 0x1C1C22),
 +        gba("Handheld Platinum", 0xC2C6CE, 0x8F949E, 0x34363C, 0xE2E4E8, 0x2A2A30),
 +        gba("Handheld Emerald",  0x178C5F, 0x0C5A3C, 0xF0D27A, 0xE9F5EE, 0x15201B),
++        // More flat styles (16..20), for the themes added with the gallery.
++        new ButtonStyle("Sand", argb(150, 0x6E4E26), argb(220, 0xB8863E), argb(210, 0xF2D8A2),
++                argb(255, 0xFFF4DC), argb(150, 0x6E4E26), argb(210, 0xC88A34), argb(210, 0x8A5A20), false),
++        new ButtonStyle("Sky", argb(140, 0x245C9A), argb(215, 0x4A90D8), argb(210, 0xC4E6FF),
++                argb(255, 0xF2FAFF), argb(140, 0x245C9A), argb(205, 0x3C8EE0), argb(205, 0x2C64A8), false),
++        new ButtonStyle("Rose", argb(150, 0x7A2048), argb(220, 0xC0487E), argb(210, 0xFFB4D2),
++                argb(255, 0xFFEAF3), argb(150, 0x7A2048), argb(210, 0xD84A86), argb(210, 0x962E5C), false),
++        new ButtonStyle("Night", argb(150, 0x261C4A), argb(220, 0x5A46A8), argb(210, 0xBCAEFF),
++                argb(255, 0xEFEAFF), argb(150, 0x261C4A), argb(210, 0x7458E0), argb(210, 0x4A38A0), false),
++        new ButtonStyle("Pok\u00e9dex", argb(160, 0x7A1212), argb(225, 0xC83030), argb(215, 0xFF9A90),
++                argb(255, 0xFFF2F0), argb(160, 0x7A1212), argb(215, 0xE03838), argb(215, 0x3A3A44), false),
++        // More handheld shells (21..24).
++        gba("Handheld Kyogre",   0x1E4EA6, 0x113274, 0xF6CACA, 0xE24A4A, 0x14182A),
++        gba("Handheld Groudon",  0xB4342A, 0x7A1E16, 0xFFE0A6, 0xECE4D8, 0x1C1C22),
++        gba("Handheld Gold",     0xC9A23C, 0x8E701E, 0x3A2A08, 0xF4ECD6, 0x2A2418),
++        gba("Handheld Atomic Purple", 0x7A5E9C, 0x4C3A6A, 0xEADFF8, 0xBAA8D8, 0x2A2236),
 +    };
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsAnimator.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ControlsAnimator.java
@@ -1893,10 +2213,10 @@ index 000000000..9018e9e30
 +}
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
 new file mode 100644
-index 000000000..700e52c71
+index 000000000..7a2c9dfd1
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Settings.java
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,79 @@
 +package com.pokeemerald.experimental.controls;
 +
 +import java.util.HashMap;
@@ -1916,7 +2236,9 @@ index 000000000..700e52c71
 +    public boolean arenaButtons = true;
 +    public boolean diagonals = true;
 +    /** Chosen handheld-shell theme (index into Themes.ALL), or -1. Shown when
-+     *  the game's own background is OFF -- choosing a shell turns it off. */
++     *  the game's own background is OFF -- choosing a shell turns it off.
++     *  Stored by the theme's id, so reordering the catalogue never changes
++     *  which shell a player had chosen. */
 +    public int shellTheme = -1;
 +    /** Moved controls: id -> {x, y} as fractions of the view size. */
 +    public final Map<String, float[]> positions = new HashMap<>();
@@ -1928,7 +2250,7 @@ index 000000000..700e52c71
 +        s.append("v=1;style=").append(style).append(";opacity=").append(opacity)
 +         .append(";scale=").append(scale).append(";haptics=").append(haptics ? 1 : 0)
 +         .append(";arena=").append(arenaButtons ? 1 : 0).append(";diag=").append(diagonals ? 1 : 0)
-+         .append(";shell=").append(shellTheme);
++         .append(";shellId=").append(shellTheme >= 0 ? Themes.ALL[shellTheme].id : "");
 +        for (Map.Entry<String, float[]> e : positions.entrySet())
 +            s.append(";pos.").append(e.getKey()).append('=').append(e.getValue()[0]).append(',').append(e.getValue()[1]);
 +        return s.toString();
@@ -1950,7 +2272,13 @@ index 000000000..700e52c71
 +                case "haptics": s.haptics = !v.equals("0"); break;
 +                case "arena":   s.arenaButtons = !v.equals("0"); break;
 +                case "diag":    s.diagonals = !v.equals("0"); break;
-+                case "shell":   s.shellTheme = Integer.parseInt(v); break;
++                case "shellId": s.shellTheme = Themes.indexOf(v); break;
++                case "shell": {  // before ids: an index into the old, uncategorised list
++                    int old = Integer.parseInt(v) - Themes.LEGACY_FIRST_SHELL;
++                    s.shellTheme = old >= 0 && old < Themes.LEGACY_SHELLS.length
++                            ? Themes.indexOf(Themes.LEGACY_SHELLS[old]) : -1;
++                    break;
++                }
 +                default:
 +                    if (k.startsWith("pos.")) {
 +                        String[] xy = v.split(",");
@@ -1963,30 +2291,72 @@ index 000000000..700e52c71
 +            }
 +        }
 +        if (s.style < MATCH_THEME || s.style >= ButtonStyle.ALL.length) s.style = MATCH_THEME;
-+        if (s.shellTheme < -1 || s.shellTheme >= Themes.ALL.length || !Themes.ALL[s.shellTheme < 0 ? 0 : s.shellTheme].isShell())
++        if (s.shellTheme < 0 || s.shellTheme >= Themes.ALL.length || !Themes.ALL[s.shellTheme].isShell())
 +            s.shellTheme = -1;
 +        return s;
 +    }
 +}
-diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/ThemeCard.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/ThemeCard.java
 new file mode 100644
-index 000000000..9ad4280fe
+index 000000000..d078109d4
 --- /dev/null
-+++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
-@@ -0,0 +1,52 @@
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/ThemeCard.java
+@@ -0,0 +1,26 @@
 +package com.pokeemerald.experimental.controls;
 +
 +/**
-+ * Screen-background themes. background is the game's BACKGROUND number
-+ * (BG.png = 0, BGn.png = n); style is the button style that suits it.
-+ * BG2.png onward come from android-build/themes/make_themes.py, in this order.
++ * A theme gallery card: the theme as it looks on a phone, in miniature. Drawn
++ * at a virtual 20:9 screen of W x H (the layout needs a real screen size to
++ * place the controls) and scaled down by the caller. The caller first draws
++ * the theme's background picture cover-scaled to W x H; this draws the rest.
++ * Shared by the Android gallery and the desktop previews.
++ */
++public final class ThemeCard {
++    private ThemeCard() {}
++
++    public static final int W = 1200, H = 540;
++
++    /** theme null is "None": a black surround with the default buttons. */
++    public static void drawOver(Painter p, Themes theme) {
++        ControlsLayout l = new ControlsLayout(W, H, new Settings(), false);
++        ButtonStyle st = ButtonStyle.ALL[theme == null ? 0 : theme.style];
++        // A stand-in game screen: sky over grass. The card's name is shown
++        // under it by the gallery.
++        float horizon = l.gameB - (l.gameB - l.gameT) * 0.3f;
++        p.fillRectGradient(l.gameL, l.gameT, l.gameR, horizon, 0xFF4F78B8, 0xFF9CC4E4, l.gameT, horizon);
++        p.fillRectGradient(l.gameL, horizon, l.gameR, l.gameB, 0xFF5CA05A, 0xFF3C7444, horizon, l.gameB);
++        ControlsRenderer.draw(p, l, st, 1f, 0, null, st.gba);
++    }
++}
+diff --git a/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
+new file mode 100644
+index 000000000..4c4d0c97a
+--- /dev/null
++++ b/android/app/src/main/java/com/pokeemerald/experimental/controls/Themes.java
+@@ -0,0 +1,144 @@
++package com.pokeemerald.experimental.controls;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * The theme catalogue, grouped into categories for the theme gallery.
++ *
++ * background is the game's BACKGROUND number (BG.png = 0, BGn.png = n), which
++ * is what the game saves, so a theme keeps its number forever and new ones
++ * are only appended. BG2.png onward come from android-build/themes/
++ * make_themes.py, which writes themes-index.txt (number -> id); ThemeCheck
++ * fails the build if this list and that file disagree. style is the button
++ * style that suits the theme. id is stable and is what settings store for a
++ * handheld shell.
 + */
 +public final class Themes {
-+    public final String name;
++    public final String id, name, category;
 +    public final int background, style;
 +
-+    private Themes(String name, int background, int style) {
-+        this.name = name; this.background = background; this.style = style;
++    private Themes(String id, String name, String category, int background, int style) {
++        this.id = id; this.name = name; this.category = category;
++        this.background = background; this.style = style;
 +    }
 +
 +    /** background value for a handheld shell: the overlay draws it, no image. */
@@ -1994,25 +2364,94 @@ index 000000000..9ad4280fe
 +
 +    public boolean isShell() { return background == SHELL; }
 +
++    public static final String HANDHELDS = "Handhelds", HOENN = "Hoenn", WEATHER = "Weather",
++            PC_BOX = "PC Box", PALS = "Box Pals", CLASSIC = "Classic", MINIMAL = "Minimal";
++
++    /** Gallery tab order. */
++    public static final String[] CATEGORIES = {HANDHELDS, HOENN, WEATHER, PC_BOX, PALS, CLASSIC, MINIMAL};
++
++    // Button style indices (ButtonStyle.ALL), named for readability here.
++    private static final int CLASSIC_ST = 0, GBA_SP = 1, FAMICOM = 2, EMERALD = 4, MAGMA = 5,
++            AQUA = 6, RETRO = 7, SAND = 16, SKY = 17, ROSE = 18, NIGHT = 19, DEX = 20;
++
++    private static Themes t(String id, String name, String cat, int bg, int style) {
++        return new Themes(id, name, cat, bg, style);
++    }
++
++    private static Themes shell(String id, String name, int style) {
++        return new Themes(id, name, HANDHELDS, SHELL, style);
++    }
++
 +    public static final Themes[] ALL = {
-+        new Themes("Starfall", 0, 0),
-+        new Themes("Open Sea", 1, 6),
-+        new Themes("Rayquaza Sky", 2, 4),
-+        new Themes("Hoenn Sunset", 3, 6),
-+        new Themes("Magma", 4, 5),
-+        new Themes("Starter Meadow", 5, 4),
-+        new Themes("Eon Night", 6, 1),
-+        new Themes("GBA Indigo", 7, 1),
-+        new Themes("Classic Green", 8, 7),
-+        new Themes("Handheld Indigo", SHELL, 8),
-+        new Themes("Handheld Glacier", SHELL, 9),
-+        new Themes("Handheld Fuchsia", SHELL, 10),
-+        new Themes("Handheld Arctic", SHELL, 11),
-+        new Themes("Handheld Black", SHELL, 12),
-+        new Themes("Handheld Spice", SHELL, 13),
-+        new Themes("Handheld Platinum", SHELL, 14),
-+        new Themes("Handheld Emerald", SHELL, 15),
++        shell("handheld_indigo", "Indigo", 8),
++        shell("handheld_glacier", "Glacier", 9),
++        shell("handheld_fuchsia", "Fuchsia", 10),
++        shell("handheld_arctic", "Arctic", 11),
++        shell("handheld_black", "Black", 12),
++        shell("handheld_spice", "Spice", 13),
++        shell("handheld_platinum", "Platinum", 14),
++        shell("handheld_emerald", "Emerald", 15),
++        shell("handheld_kyogre", "Kyogre", 21),
++        shell("handheld_groudon", "Groudon", 22),
++        shell("handheld_gold", "Gold", 23),
++        shell("handheld_atomic", "Atomic Purple", 24),
++
++        t("rayquaza_sky", "Rayquaza Sky", HOENN, 2, EMERALD),
++        t("hoenn_sunset", "Hoenn Sunset", HOENN, 3, AQUA),
++        t("magma", "Magma", HOENN, 4, MAGMA),
++        t("starter_meadow", "Starter Meadow", HOENN, 5, EMERALD),
++        t("eon_night", "Eon Night", HOENN, 6, NIGHT),
++        t("primal_clash", "Primal Clash", HOENN, 9, MAGMA),
++        t("sealed_chamber", "Sealed Chamber", HOENN, 10, SAND),
++        t("sootopolis", "Sootopolis", HOENN, 11, AQUA),
++        t("meteor_falls", "Meteor Falls", HOENN, 12, NIGHT),
++        t("contest_hall", "Contest Hall", HOENN, 13, ROSE),
++
++        t("rain", "Rain", WEATHER, 14, GBA_SP),
++        t("snowfall", "Snowfall", WEATHER, 15, SKY),
++        t("volcanic_ash", "Volcanic Ash", WEATHER, 16, MAGMA),
++        t("sandstorm", "Sandstorm", WEATHER, 17, SAND),
++        t("fog", "Fog", WEATHER, 18, GBA_SP),
++        t("harsh_sun", "Harsh Sun", WEATHER, 19, SAND),
++        t("underwater", "Underwater", WEATHER, 20, AQUA),
++
++        t("box_forest", "Forest", PC_BOX, 21, EMERALD),
++        t("box_city", "City", PC_BOX, 22, ROSE),
++        t("box_desert", "Desert", PC_BOX, 23, SAND),
++        t("box_savanna", "Savanna", PC_BOX, 24, EMERALD),
++        t("box_crag", "Crag", PC_BOX, 25, GBA_SP),
++        t("box_volcano", "Volcano", PC_BOX, 26, MAGMA),
++        t("box_snow", "Snow", PC_BOX, 27, SKY),
++        t("box_cave", "Cave", PC_BOX, 28, SAND),
++        t("box_beach", "Beach", PC_BOX, 29, AQUA),
++        t("box_seafloor", "Seafloor", PC_BOX, 30, AQUA),
++        t("box_river", "River", PC_BOX, 31, SKY),
++        t("box_sky", "Sky", PC_BOX, 32, SKY),
++        t("box_polkadot", "Polka Dot", PC_BOX, 33, AQUA),
++        t("box_pokecenter", "Pokémon Center", PC_BOX, 34, DEX),
++        t("box_machine", "Machine", PC_BOX, 35, GBA_SP),
++
++        t("pal_pikachu", "Pikachu", PALS, 36, FAMICOM),
++        t("pal_zigzagoon", "Zigzagoon", PALS, 37, SKY),
++        t("pal_azumarill", "Azumarill", PALS, 38, AQUA),
++        t("pal_ludicolo", "Ludicolo", PALS, 39, EMERALD),
++
++        t("starfall", "Starfall", CLASSIC, 0, CLASSIC_ST),
++        t("open_sea", "Open Sea", CLASSIC, 1, AQUA),
++        t("gba_indigo", "GBA Indigo", CLASSIC, 7, GBA_SP),
++        t("classic_green", "Classic Green", CLASSIC, 8, RETRO),
++        t("pocket", "Pocket", CLASSIC, 40, GBA_SP),
++
++        t("midnight", "Midnight", MINIMAL, 41, NIGHT),
++        t("slate", "Slate", MINIMAL, 42, GBA_SP),
++        t("paper", "Paper", MINIMAL, 43, FAMICOM),
 +    };
++
++    /** Shell theme ids in the order the old settings stored them (index 9..16
++     *  of the earlier, uncategorised list), for reading old settings. */
++    static final String[] LEGACY_SHELLS = {"handheld_indigo", "handheld_glacier", "handheld_fuchsia",
++            "handheld_arctic", "handheld_black", "handheld_spice", "handheld_platinum", "handheld_emerald"};
++    static final int LEGACY_FIRST_SHELL = 9;
 +
 +    /** Whether the fork's Border.png frame is drawn: only on its own two backgrounds. */
 +    public static boolean wantsBorderFrame(int background) {
@@ -2024,6 +2463,19 @@ index 000000000..9ad4280fe
 +        for (int i = 0; i < ALL.length; i++)
 +            if (ALL[i].background == background && background != SHELL) return i;
 +        return -1;
++    }
++
++    /** Index of the theme with this id, or -1. */
++    public static int indexOf(String id) {
++        for (int i = 0; i < ALL.length; i++) if (ALL[i].id.equals(id)) return i;
++        return -1;
++    }
++
++    /** The themes in one category, in catalogue order. */
++    public static List<Themes> in(String category) {
++        List<Themes> out = new ArrayList<>();
++        for (Themes t : ALL) if (t.category.equals(category)) out.add(t);
++        return out;
 +    }
 +}
 diff --git a/include/platform.h b/include/platform.h
@@ -2041,10 +2493,26 @@ index d107857b9..cb4a3e4e4 100755
  
  enum PlatformSetting
 diff --git a/src/platform/sdl2.c b/src/platform/sdl2.c
-index b991f1d93..3c999afb5 100644
+index b991f1d93..c893f4f3c 100644
 --- a/src/platform/sdl2.c
 +++ b/src/platform/sdl2.c
-@@ -67,6 +67,7 @@ static char sConfigPath[1024] = "pokeemerald.cfg";
+@@ -36,8 +36,14 @@ SDL_Thread *mainLoopThread;
+ SDL_Window *sdlWindow;
+ SDL_Renderer *sdlRenderer;
+ SDL_Texture *sdlTexture;
++// BG.png, BG1.png ... BG63.png. The game stores the chosen number, so themes
++// keep theirs and new ones are appended; OFF is stored as its own value so
++// that adding themes never turns "off" into a picture.
++#define MAX_BORDER_BACKGROUNDS 64
++#define BORDER_BACKGROUND_OFF 255
+ #if defined(NATIVE_LINUX) || defined(_WIN32)
+-#define MAX_BORDER_BACKGROUNDS 15
++// Loaded the first time each is shown: dozens of full-screen textures held
++// at once would be hundreds of megabytes.
+ SDL_Texture *sdlBackgroundTextures[MAX_BORDER_BACKGROUNDS];
+ SDL_Texture *sdlBorderTexture;
+ #endif
+@@ -67,6 +73,7 @@ static char sConfigPath[1024] = "pokeemerald.cfg";
  static u8 sBorderBackground;
  static bool sHasBorderBackgroundConfig;
  static u8 sBackgroundOrderVersion;
@@ -2052,7 +2520,55 @@ index b991f1d93..3c999afb5 100644
  static u8 sPlatformSettings[PLATFORM_SETTING_COUNT] = {0, 4, 0, 1, 1, 10};
  #ifdef __ANDROID__
  static SDL_GameController *androidController;
-@@ -426,6 +427,13 @@ int main(int argc, char **argv)
+@@ -324,6 +331,31 @@ static void ShowPreviousCrash(SDL_Window *parent)
+     }
+ }
+ 
++#if defined(NATIVE_LINUX) || defined(_WIN32)
++static SDL_Texture *BackgroundTexture(u8 index)
++{
++    char filename[16];
++
++    if (sdlBackgroundTextures[index] != NULL)
++        return sdlBackgroundTextures[index];
++#ifdef NATIVE_LINUX
++    snprintf(filename, sizeof(filename), index == 0 ? "BG.png" : "BG%d.png", index);
++    sdlBackgroundTextures[index] = IMG_LoadTexture(sdlRenderer, filename);
++#else
++    snprintf(filename, sizeof(filename), index == 0 ? "BG.bmp" : "BG%d.bmp", index);
++    SDL_Surface *surface = SDL_LoadBMP(filename);
++    if (surface != NULL)
++    {
++        sdlBackgroundTextures[index] = SDL_CreateTextureFromSurface(sdlRenderer, surface);
++        SDL_FreeSurface(surface);
++    }
++#endif
++    if (sdlBackgroundTextures[index] == NULL)
++        SDL_Log("Background %s could not be loaded: %s", filename, SDL_GetError());
++    return sdlBackgroundTextures[index];
++}
++#endif
++
+ // Everything drawn around the game image each displayed frame: clear, the
+ // desktop border background, the scaled game image and its frame.
+ static void ComposeFrame(void)
+@@ -331,9 +363,12 @@ static void ComposeFrame(void)
+     SDL_RenderClear(sdlRenderer);
+ #if defined(NATIVE_LINUX) || defined(_WIN32)
+     u8 backgroundOption = Platform_GetBorderBackground();
+-    if (backgroundOption < sBorderBackgroundCount
+-     && sdlBackgroundTextures[backgroundOption] != NULL)
+-        SDL_RenderCopy(sdlRenderer, sdlBackgroundTextures[backgroundOption], NULL, NULL);
++    if (backgroundOption < sBorderBackgroundCount)
++    {
++        SDL_Texture *background = BackgroundTexture(backgroundOption);
++        if (background != NULL)
++            SDL_RenderCopy(sdlRenderer, background, NULL, NULL);
++    }
+     int outputWidth;
+     int outputHeight;
+     SDL_GetRendererOutputSize(sdlRenderer, &outputWidth, &outputHeight);
+@@ -426,6 +461,13 @@ int main(int argc, char **argv)
      ReadSaveFile(sSavePath);
      ReadConfigFile();
  
@@ -2066,7 +2582,94 @@ index b991f1d93..3c999afb5 100644
      // Headless tests need to reach deep into the game in CI-sized time; at
      // real speed 150s is only ~9000 frames, not enough to leave the truck.
      {
-@@ -749,6 +757,8 @@ static void ReadConfigFile(void)
+@@ -466,7 +508,7 @@ int main(int argc, char **argv)
+     SDL_RenderClear(sdlRenderer);
+     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+ 
+-    for (int i = 1; i < 15; i++)
++    for (int i = 1; i < MAX_BORDER_BACKGROUNDS; i++)
+     {
+         char filename[16];
+ #ifdef _WIN32
+@@ -485,11 +527,20 @@ int main(int argc, char **argv)
+         if (sHasBorderBackgroundConfig)
+         {
+             if (sBorderBackground == 1)
+-                sBorderBackground = sBorderBackgroundCount;
++                sBorderBackground = BORDER_BACKGROUND_OFF;
+             else if (sBorderBackground >= 2)
+                 sBorderBackground--;
+         }
+-        sBackgroundOrderVersion = 2;
++        sBackgroundOrderVersion = 3;
++        StoreConfigFile();
++    }
++    if (sBackgroundOrderVersion < 3)
++    {
++        // Order 2 stored OFF as "one past the last picture", which was 9
++        // when there were nine; now it has its own value.
++        if (sHasBorderBackgroundConfig && sBorderBackground == 9)
++            sBorderBackground = BORDER_BACKGROUND_OFF;
++        sBackgroundOrderVersion = 3;
+         StoreConfigFile();
+     }
+ #ifdef NATIVE_LINUX
+@@ -500,33 +551,13 @@ int main(int argc, char **argv)
+     }
+     else
+     {
+-        for (int i = 0; i < sBorderBackgroundCount; i++)
+-        {
+-            char filename[16];
+-            snprintf(filename, sizeof(filename), i == 0 ? "BG.png" : "BG%d.png", i);
+-            sdlBackgroundTextures[i] = IMG_LoadTexture(sdlRenderer, filename);
+-        }
+         sdlBorderTexture = IMG_LoadTexture(sdlRenderer, "Border.png");
+-        if (sdlBackgroundTextures[0] == NULL)
+-            SDL_Log("Background image could not be loaded: %s", IMG_GetError());
+         if (sdlBorderTexture == NULL)
+             SDL_Log("Border image could not be loaded: %s", IMG_GetError());
+     }
+ #elif defined(_WIN32)
+     SDL_RenderSetLogicalSize(sdlRenderer, 0, 0);
+     SDL_Surface *borderSurface = SDL_LoadBMP("Border.bmp");
+-    for (int i = 0; i < sBorderBackgroundCount; i++)
+-    {
+-        char filename[16];
+-        snprintf(filename, sizeof(filename), i == 0 ? "BG.bmp" : "BG%d.bmp", i);
+-        SDL_Surface *backgroundSurface = SDL_LoadBMP(filename);
+-        if (backgroundSurface == NULL)
+-            continue;
+-        sdlBackgroundTextures[i] = SDL_CreateTextureFromSurface(sdlRenderer, backgroundSurface);
+-        SDL_FreeSurface(backgroundSurface);
+-    }
+-    if (sdlBackgroundTextures[0] == NULL)
+-        SDL_Log("Background image could not be loaded: %s", SDL_GetError());
+     if (borderSurface == NULL)
+     {
+         SDL_Log("Border image could not be loaded: %s", SDL_GetError());
+@@ -677,8 +708,9 @@ int main(int argc, char **argv)
+     CloseSaveFile();
+ 
+ #if defined(NATIVE_LINUX) || defined(_WIN32)
+-    for (int i = 0; i < sBorderBackgroundCount; i++)
+-        SDL_DestroyTexture(sdlBackgroundTextures[i]);
++    for (int i = 0; i < MAX_BORDER_BACKGROUNDS; i++)
++        if (sdlBackgroundTextures[i] != NULL)
++            SDL_DestroyTexture(sdlBackgroundTextures[i]);
+     SDL_DestroyTexture(sdlBorderTexture);
+ #endif
+ #ifdef NATIVE_LINUX
+@@ -732,7 +764,7 @@ static void ReadConfigFile(void)
+         return;
+     while (fgets(line, sizeof(line), configFile) != NULL)
+     {
+-        if (sscanf(line, "borderBackground=%u", &value) == 1 && value < 16)
++        if (sscanf(line, "borderBackground=%u", &value) == 1 && value <= BORDER_BACKGROUND_OFF)
+         {
+             sBorderBackground = value;
+             sHasBorderBackgroundConfig = true;
+@@ -749,6 +781,8 @@ static void ReadConfigFile(void)
              sPlatformSettings[PLATFORM_SETTING_VSYNC] = value != 0;
          else if (sscanf(line, "border=%u", &value) == 1)
              sPlatformSettings[PLATFORM_SETTING_BORDER] = value != 0;
@@ -2075,7 +2678,15 @@ index b991f1d93..3c999afb5 100644
          else if (sscanf(line, "volume=%u", &value) == 1 && value <= 10)
              sPlatformSettings[PLATFORM_SETTING_VOLUME] = value;
      }
-@@ -769,6 +779,7 @@ static void StoreConfigFile(void)
+@@ -762,13 +796,14 @@ static void StoreConfigFile(void)
+     if (configFile == NULL)
+         return;
+     fprintf(configFile, "borderBackground=%u\n", sBorderBackground);
+-    fprintf(configFile, "backgroundOrder=2\n");
++    fprintf(configFile, "backgroundOrder=3\n");
+     fprintf(configFile, "fullscreen=%u\n", sPlatformSettings[PLATFORM_SETTING_FULLSCREEN]);
+     fprintf(configFile, "windowScale=%u\n", sPlatformSettings[PLATFORM_SETTING_WINDOW_SCALE]);
+     fprintf(configFile, "integerScale=%u\n", sPlatformSettings[PLATFORM_SETTING_INTEGER_SCALE]);
      fprintf(configFile, "vsync=%u\n", sPlatformSettings[PLATFORM_SETTING_VSYNC]);
      fprintf(configFile, "border=%u\n", sPlatformSettings[PLATFORM_SETTING_BORDER]);
      fprintf(configFile, "volume=%u\n", sPlatformSettings[PLATFORM_SETTING_VOLUME]);
@@ -2083,7 +2694,7 @@ index b991f1d93..3c999afb5 100644
      fclose(configFile);
  }
  
-@@ -794,6 +805,13 @@ static void StoreSaveFile()
+@@ -794,6 +829,13 @@ static void StoreSaveFile()
      {
          fseek(sSaveFile, 0, SEEK_SET);
          fwrite(FLASH_BASE, 1, sizeof(FLASH_BASE), sSaveFile);
@@ -2097,7 +2708,27 @@ index b991f1d93..3c999afb5 100644
      }
  }
  
-@@ -865,6 +883,11 @@ void Platform_SetBorderBackground(u8 selection)
+@@ -843,10 +885,12 @@ u8 Platform_GetBorderBackgroundCount(void)
+     return sBorderBackgroundCount + 1;
+ }
+ 
++// 0..count-1 are pictures and count is OFF: the range the options menu and
++// the overlay's picker both cycle through.
+ u8 Platform_GetBorderBackground(void)
+ {
+     if (sHasBorderBackgroundConfig)
+-        return sBorderBackground;
++        return sBorderBackground < sBorderBackgroundCount ? sBorderBackground : sBorderBackgroundCount;
+     if (gSaveBlock2Ptr != NULL)
+     {
+         u8 legacySelection = gSaveBlock2Ptr->optionsBorderBackground;
+@@ -860,11 +904,16 @@ u8 Platform_GetBorderBackground(void)
+ 
+ void Platform_SetBorderBackground(u8 selection)
+ {
+-    sBorderBackground = selection;
++    sBorderBackground = selection < sBorderBackgroundCount ? selection : BORDER_BACKGROUND_OFF;
+     sHasBorderBackgroundConfig = true;
      StoreConfigFile();
  }
  
@@ -2109,7 +2740,7 @@ index b991f1d93..3c999afb5 100644
  u8 Platform_GetSetting(enum PlatformSetting setting)
  {
      return sPlatformSettings[setting];
-@@ -901,6 +924,35 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
+@@ -901,6 +950,35 @@ JNIEXPORT jint JNICALL Java_com_pokeemerald_experimental_GbaControlsView_getBord
      return Platform_GetBorderBackground();
  }
  

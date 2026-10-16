@@ -73,7 +73,7 @@ public final class ControlsTest {
         // Garbage never throws, and out-of-range values are clamped.
         Settings junk = Settings.parse("style=99;opacity=7;scale=-3;pos.a=zz;nonsense");
         check(junk.style == Settings.MATCH_THEME && junk.opacity == 1f && junk.scale == 0.7f, "junk clamps");
-        check(Themes.forBackground(4) == 4 && Themes.forBackground(42) == -1, "theme lookup");
+        check(Themes.ALL[Themes.forBackground(4)].id.equals("magma") && Themes.forBackground(99) == -1, "theme lookup");
 
         // ---- press animation ----
         ControlsLayout al = new ControlsLayout(2400, 1080, new Settings(), false);
@@ -99,13 +99,42 @@ public final class ControlsTest {
         check(Math.abs(an.tiltX() + 0.707f) < 0.05f && !Float.isNaN(an.tiltX()), "long frame gap is stable");
 
         // ---- handheld themes ----
-        Settings sh = new Settings(); sh.shellTheme = 9;
-        check(Settings.parse(sh.serialize()).shellTheme == 9, "shell theme round trip");
-        check(Settings.parse("shell=2").shellTheme == -1, "a non-shell theme index is rejected");
+        int kyogre = Themes.indexOf("handheld_kyogre");
+        Settings sh = new Settings(); sh.shellTheme = kyogre;
+        check(Settings.parse(sh.serialize()).shellTheme == kyogre, "shell theme round trip (by id)");
+        check(Settings.parse("shellId=rain").shellTheme == -1, "a non-shell theme id is rejected");
+        check(Settings.parse("shellId=nope").shellTheme == -1, "an unknown theme id is rejected");
+        // Settings saved before ids stored an index into the old list: 9 was Indigo, 16 Emerald.
+        check(Themes.ALL[Settings.parse("shell=9").shellTheme].id.equals("handheld_indigo"), "legacy shell 9 -> Indigo");
+        check(Themes.ALL[Settings.parse("shell=16").shellTheme].id.equals("handheld_emerald"), "legacy shell 16 -> Emerald");
+        check(Settings.parse("shell=2").shellTheme == -1, "legacy non-shell index is rejected");
         int shells = 0;
         for (Themes th : Themes.ALL) if (th.isShell()) { shells++; check(ButtonStyle.ALL[th.style].gba, th.name + " uses a hardware style"); }
-        check(shells == 8, "eight handheld shells");
+        check(shells == 12, "twelve handheld shells (" + shells + ")");
         check(Themes.forBackground(Themes.SHELL) == -1, "shell is never matched as an image background");
+
+        // ---- the catalogue ----
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        java.util.Set<Integer> bgs = new java.util.HashSet<>();
+        java.util.Set<String> cats = new java.util.HashSet<>(java.util.Arrays.asList(Themes.CATEGORIES));
+        int listed = 0;
+        for (String c : Themes.CATEGORIES) {
+            check(!Themes.in(c).isEmpty(), "category " + c + " has themes");
+            listed += Themes.in(c).size();
+        }
+        check(listed == Themes.ALL.length, "every theme is in exactly one gallery category");
+        for (Themes th : Themes.ALL) {
+            check(ids.add(th.id), "theme id unique: " + th.id);
+            check(cats.contains(th.category), th.name + " has a known category");
+            check(th.style >= 0 && th.style < ButtonStyle.ALL.length, th.name + " style index valid");
+            if (!th.isShell()) {
+                check(bgs.add(th.background), "background number unique: " + th.background);
+                check(th.background >= 0 && th.background < 64, th.name + " background within the game's limit");
+                check(!ButtonStyle.ALL[th.style].gba, th.name + " (an image theme) matches a flat style");
+            }
+        }
+        for (int i = 0; i < bgs.size(); i++) check(bgs.contains(i), "background numbers have no gap at " + i);
+        check(ButtonStyle.ALL.length == 25, "25 button styles (" + ButtonStyle.ALL.length + ")");
 
         // ---- every style renders, with and without shell and animation ----
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1200, 540, java.awt.image.BufferedImage.TYPE_INT_ARGB);
@@ -119,6 +148,20 @@ public final class ControlsTest {
                 } catch (RuntimeException e) {
                     check(false, st.name + " render threw " + e);
                 }
+            }
+        }
+        // every gallery card draws, "None" included
+        java.awt.image.BufferedImage cardImg = new java.awt.image.BufferedImage(ThemeCard.W, ThemeCard.H,
+                java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.util.List<Themes> withNone = new java.util.ArrayList<>(java.util.Arrays.asList(Themes.ALL));
+        withNone.add(null);
+        for (Themes th : withNone) {
+            try {
+                java.awt.Graphics2D g = cardImg.createGraphics();
+                ThemeCard.drawOver(new AwtPainter(g), th);
+                g.dispose();
+            } catch (RuntimeException e) {
+                check(false, (th == null ? "None" : th.name) + " card threw " + e);
             }
         }
         // the shell never paints inside the game rectangle

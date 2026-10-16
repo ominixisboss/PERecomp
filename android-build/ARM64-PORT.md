@@ -854,3 +854,40 @@ The same review found three renderer bugs:
 - On the black handheld the D-pad's engraved arrows were darker than a
   near-black cross. They are now engraved lighter on dark plastic.
 - The speaker grille ran into the bottom-right screw.
+
+## Theme gallery
+
+The theme picker was a plain dropdown of 17 names. It is now a full-screen
+gallery: seven category tabs, each a grid of cards drawn by the same
+renderer as the overlay (`ThemeCard`), so a card shows the theme's background,
+its matching buttons and, for a handheld, the whole shell. Tapping a card
+applies it at once. `controls-tests/GalleryPreview` draws the same cards on the
+desktop for review.
+
+There are now 44 background pictures and 12 handheld shells. The new pictures
+come from the game's own graphics:
+- **PC Box:** the box wallpapers, decoded the way the game builds them (frame
+  tiles followed by pattern tiles, a 20x18 tilemap, two palettes). Seamless
+  patterns are tiled at the game's pixel size. Those with a top-to-bottom
+  picture (sky, shore, sea floor) fill the height instead, with the join under
+  the game screen.
+- **Weather:** the field-effect sprites and textures.
+- **Hoenn:** new scenes such as Primal Clash, the Sealed Chamber's braille and
+  Meteor Falls.
+
+Changes this needed:
+
+- **The game's background limit.** `sdl2.c` counted at most 15 pictures and
+  stored BACKGROUND OFF as "one past the last picture", so adding a picture
+  silently turned a player's "off" into that picture. The limit is now 64 and
+  OFF is stored as 255. Config order 3 migrates the old OFF (9, when there
+  were nine pictures) to it.
+- **Desktop textures.** The desktop build loaded every picture into a texture
+  at startup; it now loads each the first time it is shown.
+- **Stable ids.** A theme's number never changes and new ones are appended.
+  The chosen handheld shell is stored by id rather than by list position, with
+  old positions mapped for existing settings.
+- **Generator and app agree.** `make_themes.py` writes `themes-index.txt`
+  (number -> id), and ThemeCheck fails the build if `Themes.java` disagrees
+  or a picture is generated but not listed. All 44 pictures pass the
+  busyness and contrast checks with their matching style.
