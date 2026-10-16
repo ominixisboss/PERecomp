@@ -891,3 +891,18 @@ Changes this needed:
   (number -> id), and ThemeCheck fails the build if `Themes.java` disagrees
   or a picture is generated but not listed. All 44 pictures pass the
   busyness and contrast checks with their matching style.
+
+## Handheld body missing on the phone
+
+On the phone a handheld theme showed its buttons, screws, power light and
+screen bezel on plain black: the plastic body was missing. The body is one
+large vertical gradient (`fillRectGradient`). On Android a Paint with a shader
+still multiplies in the alpha of the Paint's own colour, and `CanvasPainter`
+reused one fill Paint whose colour was whatever was set last. That was often
+the gear's fully transparent centre, so the body was drawn at zero opacity.
+Java2D has no such coupling, so every desktop preview looked right. Both
+gradient calls now set an opaque colour before the shader.
+
+Two related changes: handheld styles are no longer offered as button styles
+(they drew handheld buttons with no handheld body), and a handheld theme
+always uses its own buttons.

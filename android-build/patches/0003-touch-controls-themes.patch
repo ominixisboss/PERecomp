@@ -48,10 +48,10 @@ index 8f443203c..05910f96e 100644
              path file('src/main/cpp/CMakeLists.txt')
 diff --git a/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
 new file mode 100644
-index 000000000..44f3cbe4b
+index 000000000..9cf4f809e
 --- /dev/null
 +++ b/android/app/src/main/java/com/pokeemerald/experimental/CanvasPainter.java
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,83 @@
 +package com.pokeemerald.experimental;
 +
 +import android.graphics.Canvas;
@@ -111,12 +111,20 @@ index 000000000..44f3cbe4b
 +        for (int i = 2; i < xy.length; i += 2) path.lineTo(xy[i], xy[i + 1]);
 +        path.close(); canvas.drawPath(path, stroke);
 +    }
++    // A Paint with a shader still multiplies in its own colour's alpha. The
++    // fill Paint keeps whatever colour was set last -- often the gear's fully
++    // transparent centre -- so without an opaque colour first, gradients drew
++    // at zero opacity: the handheld body (one big gradient) vanished on the
++    // phone while every solid part around it showed. Java2D has no such
++    // coupling, which is why the desktop previews looked right.
 +    @Override public void fillRectGradient(float l, float t, float r, float b, int top, int bottom, float g0, float g1) {
++        fill.setColor(0xFF000000);
 +        fill.setShader(new LinearGradient(0, g0, 0, g1, top, bottom, Shader.TileMode.CLAMP));
 +        canvas.drawRect(l, t, r, b, fill);
 +        fill.setShader(null);
 +    }
 +    @Override public void fillCircleRadial(float cx, float cy, float r, float fx, float fy, int inner, int outer) {
++        fill.setColor(0xFF000000);            // opaque, as above
 +        fill.setShader(new RadialGradient(fx, fy, Math.max(1, r), inner, outer, Shader.TileMode.CLAMP));
 +        canvas.drawCircle(cx, cy, r, fill);
 +        fill.setShader(null);
